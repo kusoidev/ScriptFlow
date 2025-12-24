@@ -4471,7 +4471,8 @@ ${JSON.stringify(meta, null, 2)}
     }
 
     // this takes a local workspace and pushes it to a new github repo
-    async pushNew() {
+	// new note: this doesnt look like its needed anymore so im removing it
+    /*async pushNew() {
         if (this.mode !== 'workspace' || !this.workspaceHandle) {
             this.logGit("ERROR: A workspace must be loaded first");
             return;
@@ -4666,7 +4667,7 @@ ${JSON.stringify(meta, null, 2)}
             this.logGit(`ERROR: ${err.message}`);
             console.error(err);
         }
-    }
+    }*/
 
     // handles renaming for both git and local files
     async rename() {
@@ -5159,7 +5160,6 @@ ${JSON.stringify(meta, null, 2)}
             }
         });
 
-        document.getElementById('gitInitPushBtn').addEventListener('click', () => this.pushNew());
         document.getElementById('newFileBtn').addEventListener('click', () => {
             if (this.mode !== 'workspace' && this.mode !== 'git' && this.mode !== 'multi-file-edit') {
                 this.showNotification({
