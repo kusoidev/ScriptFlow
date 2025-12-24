@@ -768,40 +768,48 @@ class ScriptFlowEditor {
     async refreshSourceControl() {
         const scPanel = document.getElementById('sourceControlPanel');
         if (!scPanel) return;
-
-        if (this.mode !== 'git' && this.mode !== 'multi-file-edit') {
-            scPanel.innerHTML = `
-                <div style="padding: 10px; color: var(--muted); font-style: italic; font-size: 14px;">
-                    Source control is only available when a Git repository is cloned or a multi-file project with GitHub repo is loaded.
-                    <br><br>
-                    You can clone a repository using the <strong>Github</strong> button in the header.
-                </div>
-            `;
+        
+        const repoUrl = document.getElementById('repoUrl')?.value?.trim();
+        const hasRepoUrl = repoUrl && repoUrl.startsWith('https');
+        
+        if (this.mode !== 'git' && 
+            this.mode !== 'multi-file-edit' && 
+            !(this.mode === 'workspace' && hasRepoUrl)) {
+            scPanel.innerHTML = `<div style="padding: 10px; color: var(--muted); font-style: italic; font-size: 14px;">
+                Source control is only available when a Git repository is cloned or a workspace/project with GitHub repo is configured.
+                <br/><br/>
+                You can clone a repository using the <strong>Github</strong> button in the header.
+            </div>`;
             return;
         }
 
         if (this.mode === 'multi-file-edit' && (!this.script?.githubRepo || !this.script.githubRepo.url)) {
-            scPanel.innerHTML = `
-                <div style="padding: 10px; color: var(--muted); font-style: italic; font-size: 14px;">
-                    No GitHub repository configured for this project.
-                    <br><br>
-                    Click <strong>Github</strong> in the header to set up source control.
-                </div>
-            `;
+            scPanel.innerHTML = `<div style="padding: 10px; color: var(--muted); font-style: italic; font-size: 14px;">
+                No GitHub repository configured for this project.
+                <br/><br/>
+                Click <strong>Github</strong> in the header to set up source control.
+            </div>`;
+            return;
+        }
+
+        if (this.mode === 'workspace' && !hasRepoUrl) {
+            scPanel.innerHTML = `<div style="padding: 10px; color: var(--muted); font-style: italic; font-size: 14px;">
+                No GitHub repository configured for this workspace.
+                <br/><br/>
+                Click <strong>Github</strong> in the header and set a Repository URL to enable source control.
+            </div>`;
             return;
         }
 
         try {
-            if (this.mode === 'multi-file-edit') {
+            if (this.mode === 'workspace' && this.workspaceHandle) {
+                await this.syncWorkspaceToGit();
+            } else if (this.mode === 'multi-file-edit') {
                 await this.syncMultiFileToGit();
             }
 
             const gitDir = this.getGitDir();
-
-            const status = await this.git.statusMatrix({
-                fs: this.fs,
-                dir: gitDir
-            });
+            const status = await this.git.statusMatrix({ fs: this.fs, dir: gitDir });
 
             this.sourceControl.changedFiles = status
                 .filter(([filepath, head, workdir, stage]) => {
@@ -812,7 +820,6 @@ class ScriptFlowEditor {
                     if (head === 0) status = 'untracked';
                     else if (workdir === 0) status = 'deleted';
                     else if (stage === 2) status = 'added';
-
                     return {
                         path: filepath,
                         status: status,
@@ -823,6 +830,67 @@ class ScriptFlowEditor {
             this.renderSourceControl();
         } catch (err) {
             console.error('Error refreshing source control:', err);
+        }
+    }
+
+    async syncWorkspaceToGit() {
+        if (!this.workspaceHandle) {
+            console.warn('syncWorkspaceToGit: No workspace handle');
+            return;
+        }
+
+        try {
+            const gitDir = this.gitDir;
+            const repoUrl = document.getElementById('repoUrl').value;
+            
+            try {
+                await this.gitFS.stat(`${gitDir}/.git`);
+            } catch (e) {
+                await this.gitFS.mkdir(gitDir);
+                await this.git.init({ fs: this.fs, dir: gitDir });
+            }
+
+            if (repoUrl) {
+                try {
+                    const remotes = await this.git.listRemotes({ fs: this.fs, dir: gitDir });
+                    const hasOrigin = remotes.some(r => r.remote === 'origin');
+                    
+                    if (!hasOrigin) {
+                        await this.git.addRemote({
+                            fs: this.fs,
+                            dir: gitDir,
+                            remote: 'origin',
+                            url: repoUrl
+                        });
+                    } else {
+                        const origin = remotes.find(r => r.remote === 'origin');
+                        if (origin.url !== repoUrl) {
+                            await this.git.deleteRemote({ fs: this.fs, dir: gitDir, remote: 'origin' });
+                            await this.git.addRemote({
+                                fs: this.fs,
+                                dir: gitDir,
+                                remote: 'origin',
+                                url: repoUrl
+                            });
+                        }
+                    }
+                } catch (remoteErr) {
+                    console.warn('Remote configuration:', remoteErr);
+                }
+            }
+
+            const entries = await this.gitFS.readdir(gitDir);
+            for (const entry of entries) {
+                if (entry === '.git') continue;
+                await this.deleteRecursive(`${gitDir}/${entry}`);
+            }
+
+            console.log('syncWorkspaceToGit: Copying workspace files...');
+            await this.copyToFS(this.workspaceHandle, gitDir, false);
+            console.log('syncWorkspaceToGit: Sync complete');
+        } catch (err) {
+            console.error('Error syncing workspace to git:', err);
+            throw err;
         }
     }
 
@@ -1133,7 +1201,10 @@ class ScriptFlowEditor {
         }
 
         try {
-            if (this.mode === 'multi-file-edit') {
+
+            if (this.mode === 'workspace') {
+                await this.syncWorkspaceToGit();
+            } else if (this.mode === 'multi-file-edit') {
                 await this.syncMultiFileToGit();
             }
 
@@ -1142,17 +1213,9 @@ class ScriptFlowEditor {
             for (const filepath of this.sourceControl.stagedFiles) {
                 const file = this.sourceControl.changedFiles.find(f => f.path === filepath);
                 if (file?.status === 'deleted') {
-                    await this.git.remove({
-                        fs: this.fs,
-                        dir: gitDir,
-                        filepath: filepath
-                    });
+                    await this.git.remove({ fs: this.fs, dir: gitDir, filepath: filepath });
                 } else {
-                    await this.git.add({
-                        fs: this.fs,
-                        dir: gitDir,
-                        filepath: filepath
-                    });
+                    await this.git.add({ fs: this.fs, dir: gitDir, filepath: filepath });
                 }
             }
 
@@ -1160,14 +1223,10 @@ class ScriptFlowEditor {
                 fs: this.fs,
                 dir: gitDir,
                 message: this.sourceControl.commitMessage,
-                author: {
-                    name: 'ScriptFlow',
-                    email: 'bot@scriptflow.app'
-                }
+                author: { name: 'ScriptFlow', email: 'bot@scriptflow.app' }
             });
 
-            this.setStatus(`Committed: ${sha.substring(0, 7)}`, true, 'success');
-
+            this.setStatus(`Committed ${sha.substring(0, 7)}`, true, 'success');
             this.sourceControl.stagedFiles.clear();
             this.sourceControl.commitMessage = '';
 
@@ -1182,19 +1241,10 @@ class ScriptFlowEditor {
                 }
 
                 try {
-                    await this.git.branch({
-                        fs: this.fs,
-                        dir: gitDir,
-                        ref: branch,
-                        checkout: true
-                    });
+                    await this.git.branch({ fs: this.fs, dir: gitDir, ref: branch, checkout: true });
                 } catch (e) {
                     try {
-                        await this.git.checkout({
-                            fs: this.fs,
-                            dir: gitDir,
-                            ref: branch
-                        });
+                        await this.git.checkout({ fs: this.fs, dir: gitDir, ref: branch });
                     } catch (checkoutErr) {
                         console.warn('Branch handling:', checkoutErr);
                     }
@@ -1218,20 +1268,16 @@ class ScriptFlowEditor {
                 if (result?.ok) {
                     this.logGit('Push successful!');
                     this.saveCounter = 0;
-
+                    
                     let url;
                     if (this.mode === 'multi-file-edit' && this.script?.githubRepo?.url) {
                         url = this.script.githubRepo.url;
-
                         this.script.githubRepo.lastPush = Date.now();
-                        await chrome.runtime.sendMessage({
-                            action: 'saveScript',
-                            script: this.script
-                        });
+                        await chrome.runtime.sendMessage({ action: 'saveScript', script: this.script });
                     } else {
                         url = document.getElementById('repoUrl')?.value;
                     }
-
+                    
                     if (url) {
                         await this.updateRepoHistory(url);
                     }
@@ -1239,7 +1285,7 @@ class ScriptFlowEditor {
                     if (this.mode === 'multi-file-edit') {
                         await this.syncGitToMultiFile();
                     }
-
+                    
                     this.setStatus('Committed and pushed!', true, 'success');
                 } else {
                     const error = result.errors ? result.errors.join(', ') : 'Unknown error';
@@ -1248,7 +1294,6 @@ class ScriptFlowEditor {
             }
 
             await this.refreshSourceControl();
-
         } catch (err) {
             console.error('Commit/Push error:', err);
             this.setStatus(`Commit/Push failed: ${err.message}`, true, 'error');
@@ -3507,26 +3552,26 @@ ${JSON.stringify(meta, null, 2)}
     }
 
     async loadSavedWorkspace() {
-        try {
-            const workspace = await this.idb.get('workspaces', 'root');
-            if (!workspace?.handle) return false;
-
-            const permission = await workspace.handle.queryPermission({
-                mode: 'readwrite'
-            });
-            if (permission === 'granted') {
-                this.projectEntryPoint = null;
-                await this.initWorkspace(workspace.handle, false);
+        const data = await this.idb.get('workspaces', 'root');
+        if (data && data.handle) {
+            try {
+                await data.handle.requestPermission({ mode: 'readwrite' });
+                this.workspaceHandle = data.handle;
+                await this.initWorkspace(data.handle);
+                
+                const repoUrl = document.getElementById('repoUrl')?.value?.trim();
+                if (repoUrl && repoUrl.startsWith('https')) {
+                    const scTab = document.querySelector('.sidebar-tab[data-tab="source-control"]');
+                    if (scTab) scTab.style.display = 'block';
+                }
+                
                 return true;
-            } else {
-                this.setStatus(`Workspace "${workspace.handle.name}" found. Click "Load Workspace" to reconnect.`);
-                this.toggleExplorer(false);
+            } catch (err) {
+                console.log('Permission denied or workspace unavailable');
                 return false;
             }
-        } catch (err) {
-            console.error("Error loading workspace:", err);
-            return false;
         }
+        return false;
     }
 
     async createEmptyMultiFileProject() {
@@ -4799,8 +4844,11 @@ ${JSON.stringify(meta, null, 2)}
         } else if (tabName === 'source-control') {
             if (filesContent) filesContent.style.display = 'none';
             if (scContent) scContent.style.display = 'block';
-
-            if (this.mode === 'git' || (this.mode === 'multi-file-edit' && this.script?.githubRepo?.url)) {
+            
+            const repoUrl = document.getElementById('repoUrl')?.value?.trim();
+            const hasRepoUrl = repoUrl && repoUrl.startsWith('https');
+            
+            if (this.mode === 'git' || this.mode === 'multi-file-edit' && this.script?.githubRepo?.url || this.mode === 'workspace' && hasRepoUrl) {
                 this.refreshSourceControl();
             }
         }
@@ -5170,7 +5218,19 @@ ${JSON.stringify(meta, null, 2)}
                 document.getElementById('branch').value = this.script.githubRepo.branch || 'main';
             }
         });
-        document.getElementById('gitModalCloseBtn').addEventListener('click', () => this.gitModal.classList.remove('visible'));
+        document.getElementById('gitModalCloseBtn')?.addEventListener('click', () => {
+            document.getElementById('gitModal').classList.remove('visible');
+            
+            if (this.mode === 'workspace') {
+                const repoUrl = document.getElementById('repoUrl')?.value?.trim();
+                if (repoUrl && repoUrl.startsWith('https')) {
+                    const scTab = document.querySelector('.sidebar-tab[data-tab="source-control"]');
+                    if (scTab) {
+                        scTab.style.display = 'block';
+                    }
+                }
+            }
+        });
         document.getElementById('gitCloneBtn').addEventListener('click', () => this.clone());
         document.getElementById('gitPullBtn').addEventListener('click', () => {
             if (this.mode === 'multi-file-edit') {

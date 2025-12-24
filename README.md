@@ -1,301 +1,161 @@
 # ScriptFlow - UserScript Manager
 
-## What This Actually Is
+## If I couldn't tell from the text above, what is ScriptFlow?
 
-ScriptFlow is a **userscript manager for people who want to write real code**, not shove 5,000 lines into one file and pray.
+ScriptFlow is a userscript manager alternative for people who prefer userscript managers more or less built as a development suite for developers and people who work with large projects, including features such as:
+* Folders
+* Importing
+* Editing environments
+* & Web injection across any site
 
-You get:
+---
 
-* Real folders
-* Real imports
-* Real editing
-* Instant injection into the browser
+## Index
 
-No Node. No Webpack. No copy-paste ritual every time you change a line.
+- [Installation](#installation)
+- [How it works](#how-it-works)
+- [Browser Support](#browser-support)
+- [Core Features](#core-features)
+  - [Multi-File Example](#multi-file-example)
+  - [Live Editing & Local Workspaces](#live-editing--local-workspaces)  
+  - [Monaco Editor](#monaco-editor)
+  - [Git Integration](#git-integration)
+  - [GM/Greasemonkey API](#gmgreasemonkey-api)
+  - [Developer Tools](#developer-tools)
+  - [Import & Export](#import--export)
+  - [Live Preview (PiP)](#live-preview-pip)
+  - [Execution Control](#execution-control)
+  - [Personalization](#personalization)
+  - [Templates](#templates)
+- [About "Allow User Scripts"](#about-allow-user-scripts)
+- [Screenshots](#screenshot-showcase)
+- [Support Development](#support-development)
 
-You write code. You save. It runs.
+---
 
-That’s it.
+## Installation
+
+1. Clone or download as ZIP
+
+![alt text](https://i.imgur.com/8TdFbys.png)
+
+2. Open `chrome://extensions`
+3. Enable **Developer Mode**
+4. Click **Load Unpacked** → select ScriptFlow folder inside of the unzipped folder
+5. **Enable "Allow User Scripts"** (Scriptflow wont work as intended without this enabled)
+
+---
+
+## How it works
+
+ScriptFlow, as previously mentioned in the first category, is primarily aimed as a userscript manager/development suite.
+
+For editing files within ScriptFlow, you may notice the metadata block format is different from other userscript managers as following:
+
+<details>
+<summary>Expand to view</summary>
+
+Scriptflow:
+```js
+/*
+@ScriptFlow
+{
+  "name": "New Script",
+  "description": "A brief description of your script",
+  "match": [
+    "https://example.com/*"
+  ]
+}
+*/
+
+(function() {
+    'use strict';
+    
+    console.log('ScriptFlow script loaded!');
+    
+})();
+```
+
+Tampermonkey:
+```js
+// ==UserScript==
+// @name         New Userscript
+// @namespace    http://tampermonkey.net/
+// @version      2025-12-24
+// @description  try to take over the world!
+// @author       You
+// @match        https://*/*
+// @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    console.log("Hello World")
+})();
+```
+</details>
+
+This is done intentionally, for both readability and just being easier to use.
+
+Using @match as an example, commonly used in Tampermonkey and ViolentMonkey, it goes from:
+
+```js
+// @match        https://*/*
+```
+
+To:
+
+```js
+  "match": ["all"]
+```
+
+Which is both a 10 character difference and also more versatile, allowing you to do "all" rather than having to do `*://*/*`.
 
 ---
 
 ## Browser Support
 
-**Works on:**
-- Chrome (v120+)
-- Edge
-- Brave
-- Opera
-- Arc
-- Vivaldi
+| ✅ Supported | ❌ Unsupported |
+|----------|-----------------|
+| Chrome (v120+) | Firefox |
+| Edge | Safari |
+| Brave | |
+| Opera | |
+| Arc | |
+| Vivaldi | |
 
-**Does NOT work on:**
-- Firefox (different APIs)
-- Safari (different extension system)
-
-ScriptFlow uses Chrome's userScripts API.
-Firefox and Safari don't have it.
-
-If you're on Firefox, this isn't for you (yet).
+ScriptFlow uses Chrome's `userScripts` API. Firefox and Safari don't have it.
 
 ---
 
-## What Makes This Different
+## Core Features
 
-ScriptFlow is not trying to be “Tampermonkey but prettier”.
+### Multi-File Projects
 
-It’s closer to:
-
-> *“What if userscripts didn’t force you to code like it’s 2009?”*
-
-The big difference:
-
-* You **don’t build** anything
-* You **don’t bundle** anything yourself
-* You **don’t flatten your project** into one cursed file
-
-You keep your project structure.
-ScriptFlow handles the rest **at runtime**.
-
----
-
-## Why Most UserScript Setups Suck
-
-Let’s be honest.
-
-### Tampermonkey / Violentmonkey
-
-* One file
-* No imports
-* No structure
-* Editing in a tiny textarea or copy-pasting from an editor like a caveman
-
-People end up with:
-
-```js
-// utils
-// ui
-// helpers
-// everything
-```
-
-in one file. It’s unreadable garbage.
-
-### “Just use Webpack bro”
-
-Sure, if you enjoy:
-
-* Node installs
-* Build configs
-* Babel drama
-* Rebuilding just to test a DOM change
-
-For **userscripts**, that’s insane overhead.
-
-ScriptFlow exists because both of these options are bad.
+| Feature | Support |
+|---------|---------|
+| ES Modules (`import`/`export`) | ✅ |
+| CommonJS (`require`/`module.exports`) | ✅ |
+| JSON imports | ✅ |
+| CSS auto-injection | ✅ |
+| Relative paths (`./`, `../`) | ✅ |
+| Entry point configuration | ✅ |
+| Circular dependency detection | ✅ |
+| `require.context()` | ✅ |
+| Lazy module loading | ✅ |
 
 ---
 
-## How It Actually Works
-
-ScriptFlow does **everything in the browser**.
-
-### High-level flow
-
-1. You write files (`.js`, `.json`, `.css`)
-2. ScriptFlow reads them (local folder or Git repo)
-3. It **transpiles imports at runtime**
-4. It bundles modules **in memory**
-5. The final output gets injected using the User Scripts API
-
-No disk builds.
-No external tools.
-No background Node process.
-
----
-
-### The Module System
-
-ScriptFlow has its own lightweight module loader.
-
-It:
-
-* Resolves `import` / `export`
-* Supports `require()` if you want it
-* Loads JSON as actual objects
-* Tracks dependencies
-* Detects circular imports (and warns you)
-
-Example:
-
-```js
-// main.js
-import { render } from './ui/render.js';
-import config from './config.json';
-
-render(config);
-```
-
-That’s it.
-No config file.
-No build step.
-
----
-
-## Core features (only the ones that matter)
-
-### Multi-file projects
-
-Folders work. Imports work. Relative paths work.
-
-If you can structure a normal JS project, you can use ScriptFlow.
-
----
-
-### Live editing
-
-You save a file.
-The script updates.
-No reload dance.
-
-Uses the **File System Access API**, so you’re editing real files — not copies.
-
----
-
-### Git integration
-
-You can:
-
-* Clone a repo
-* Edit files
-* Commit
-* Push
-
-All inside the extension.
-
-No terminal.
-No git install.
-It just uses `isomorphic-git` under the hood.
-
----
-
-### Live Preview
-
-Live Preview lets you **see what your script is doing without constantly reloading pages**.
-
-It opens a small PictureInPicture (PiP) window that:
-
-* Loads your HTML/CSS/JS together
-* Resolves imports the same way the script does
-* Updates instantly when you save a file
-
-No refresh spam.
-No injecting just to see if a div moved 3px.
-
-It’s basically a sandbox:
-
-* Good for UI work
-* Good for layout and styling
-* Good for testing logic before injecting it into a real site
-
-This is **not** a full browser environment.
-No site JS. No extensions. No page-specific APIs.
-Just utilizes PictureInPicture API.
-
-It’s for fast feedback — not production testing.
-
-Save → preview updates → move on.
-
----
-
-### Monaco editor
-
-It’s basically VS Code in the browser.
-
-Autocomplete works.
-Syntax highlighting works.
-Formatting works.
-IntelliSense works.
-
-No surprises here.
-
----
-
-### CSS and assets
-
-CSS files get injected automatically.
-Images and resources can be embedded.
-
-You don’t have to manually shove styles into strings unless you want to.
-
----
-
-## Getting started
-
-### Install
-
-1. Clone This OR Download as zip.
-2. Open `chrome://extensions`
-3. Enable developer mode
-4. Load unpacked
-5. Drag ScriptFlow
-6. Enable Allow User Scripts (this is the most important part).
-
-Done.
-
----
-
-### About that "Allow User Scripts" thing
-
-When you enable ScriptFlow, Chrome will warn you:
-
-> "This extension can run code that hasn't been reviewed by Google"
-
-This is **expected**.
-
-**Why?**
-- ScriptFlow uses the userScripts API (same as Tampermonkey)
-- You're writing code that runs on websites
-- Chrome warns about this because it's powerful
-
-**Is it safe?**
-- The code is open source (check it yourself)
-- No minification or obfuscation
-- No telemetry or tracking
-- No external requests
-
-If you don't trust it, read the code first.
-Everything is visible.
-
----
-
-### Minimal script
-
-```js
-/*
-@ScriptFlow
-{
-  "name": "Test Script",
-  "match": ["https://example.com/*"]
-}
-*/
-
-console.log('It runs');
-```
-
-Save it.
-Open the page.
-Check the console.
-
----
-
-### Multi-file example
+### Multi-file Example
 
 ```js
 // main.js
 import { greet } from './greet.js';
+import config from './config.json';
 
-greet('World');
+greet(config.name);
 ```
 
 ```js
@@ -305,84 +165,184 @@ export function greet(name) {
 }
 ```
 
-That’s a real project now.
-Not a single-file mess.
+---
+
+### Live Editing & Local Workspaces
+
+Uses the **File System Access API**
+
+* Load any local folder as a workspace
+* Changes sync automatically
+* Permission persists across sessions
+* Create/rename/delete files in the explorer
+
+When saving a file, It will also automatically update the script as well, so you dont need to both save the file and save the script
 
 ---
 
-## Things ScriptFlow is NOT
+### Monaco Editor
 
-Let’s be clear.
-
-* ❌ Not a replacement for full browser extensions
-* ❌ Not a production build system
-* ❌ Not magic CSP bypass
-* ❌ Not designed for ancient browsers
-
-It’s for **modern Chromium-based browsers** and **people who know JavaScript**.
-
----
-
-## Tips to not break it
-
-* Don’t import the same file in five different ways
-* Keep one clear entry point
-* Don’t fight the module system — use it
-* If something breaks, check the console (ScriptFlow is noisy on purpose)
-* Large projects? Split them. Lazy loading exists for a reason
+| Currently supported for the Editor | |
+|---------|--|
+| Syntax highlighting | ✅ |
+| Autocomplete & IntelliSense | ✅ |
+| Code formatting (Ctrl+H) | ✅ |
+| Command palette (Ctrl+[) | ✅ |
+| File explorer sidebar (Ctrl+B) | ✅ |
+| Multiple themes | Dracula, Monokai, VS Dark, VS Light, Solarized |
+| Configurable font size | 10-30px |
+| Tab size | 2-8 spaces |
+| Line numbers | On, Off, Relative |
+| Minimap | Toggle on/off |
+| Word wrap | Toggle on/off |
+| Large file handling | Optimized for files >200KB |
 
 ---
 
-## Final notes
+### Git Integration
 
-ScriptFlow exists because:
+To make the experience better, ScriptFlow also has intergration with Github, allowing you to do the following without having to leave the workspace:
 
-* Userscripts deserve real tooling
-* Copy-pasting is dumb
-* Build steps kill iteration speed
+* Clone repositories
+* Pull/push changes
+* Select branches
+* View Repository history (quick access to recent repos)
+* GitHub PAT authentication
+* Push your local workspace to new repo
 
-If you like clean projects, fast feedback, and not wasting time — this will feel right.
-
-If you’re fine with one giant file and pain — this probably isn’t for you.
-
-That’s okay.
-
----
-
-## Screenshot Showcase
-
-### Project structure
-
-![Project structure](https://i.ibb.co/23D83vjj/scriptflow4.png)
+Uses `isomorphic-git`
 
 ---
 
-### Monaco editor
+### GM/Greasemonkey API
 
-![Monaco editor](https://i.ibb.co/VYvqNJJQ/scriptflow3.webp)
+Fully compatible with the following standard userscript APIs:
+
+| API | Description |
+|-----|-------------|
+| `GM_addStyle(css)` | Inject CSS into pages |
+| `GM_setValue(key, value)` | Persistent storage |
+| `GM_getValue(key, default)` | Read from storage |
+| `GM_deleteValue(key)` | Delete stored value |
+| `GM_listValues()` | List all stored keys |
+| `GM_xmlhttpRequest(details)` | Cross-origin requests |
+| `GM_getResourceText(name)` | Access embedded resources |
+| `GM_openInTab(url)` | Open URLs in new tabs |
+| `GM_setClipboard(text)` | Copy to clipboard |
+| `GM_setHTML(el, html)` | Safe innerHTML (Trusted Types) |
+| `GM_info` | Script metadata |
+| `GM_log(msg)` | Styled console logging |
+| `unsafeWindow` | Direct page window access |
+
+
+---
+
+### Developer Tools
+
+| Tool | Description |
+|------|-------------|
+| **JavaScript Console** | Allows for code execution on any tab from the extension |
+| **Memory Inspector** | Draggable overlay showing live memory usage |
+| **Debug Logging** | Toggles detailed console outputting |
+| **Time Tracking** | Tracks time spent editing each script |
+
+---
+
+### Import & Export
+
+| Feature | |
+|---------|--|
+| Export project as ZIP | ✅ |
+| Export all data (JSON backup) | ✅ |
+| Import from JSON backup | ✅ |
+| **Import Tampermonkey/Violentmonkey backups** | ✅ (ZIP with .user.js files) |
+| **Install from URL** | Click any `.user.js` link to install |
+| **Export as bundled userscript** | Single-file with proper headers |
 
 ---
 
 ### Live Preview (PiP)
 
-![Live Preview](https://i.ibb.co/xq646kPK/y281nkoz.webp)
+Opens a Picture-in-Picture window which:
+
+* Loads your HTML/CSS/JS together
+* Resolves imports the same way
+* Updates instantly when you save
+
+> ⚠️ Do note this is not a full browser environment, which means there is no site JS or extensions.
 
 ---
 
-### Git integration
+### Execution Control
 
+| Setting | Options |
+|---------|---------|
+| Run At | `document_start`, `document_end`, `document_idle` |
+| URL patterns | `https://*.example.com/*` |
+| Exclude patterns | Skip specific URLs |
+| Execution delay | Customizable 0-5000ms delay before running |
+| Manual run | Execute from popup |
+| Auto-update check | Never, Daily, Weekly, Monthly |
+
+---
+
+
+### Personalization
+
+* Upload custom background images (PNG, JPG, GIF up to 10MB)
+* Adjust opacity and blur
+* Multiple UI themes (Dark Purple, Dark Blue, Dark Forest, Midnight, Amber)
+
+---
+
+### Templates
+
+* **Basic Script** — Minimal structure
+* **DOM Manipulation** — Ready for DOM mods
+* **AJAX Interceptor** — Fetch/XHR interception
+* **CSS Injection** — Ad-blocking and styling
+* **Utility Functions** — Helpers like `waitForElement()`
+
+---
+
+
+## About "Allow User Scripts"
+
+When you enable ScriptFlow, Chrome warns you:
+
+> "This extension can run code that hasn't been reviewed by Google"
+
+This is **expected**.
+
+**Why?**
+- ScriptFlow uses the `userScripts` API (same as Tampermonkey)
+- You're writing code that runs on websites
+- Chrome warns because it's powerful
+
+**Is it safe?**
+- Code is open source (check it yourself)
+- No minification or obfuscation
+- No telemetry or tracking
+- No external requests unless you add them
+
+---
+
+## Screenshot Showcase
+
+### Project Structure
+![Project structure](https://i.ibb.co/23D83vjj/scriptflow4.png)
+
+### Monaco Editor
+![Monaco editor](https://i.ibb.co/VYvqNJJQ/scriptflow3.webp)
+
+### Live Preview (PiP)
+![Live Preview](https://i.ibb.co/xq646kPK/y281nkoz.webp)
+
+### Git Integration
 ![Git integration](https://i.ibb.co/Lh10q6pf/scriptflow5.png)
 ![Source Control](https://i.ibb.co/Jjc4zb4L/2fmp992i.webp)
 
----
-
-## Personalization
-
-Make ScriptFlow truly yours with custom backgrounds:
-- Upload any image (PNG, JPG, GIF)
-- Adjust opacity and blur
-- Create your perfect coding environment
-
+### Personalization
 ![Personalization](https://i.ibb.co/hF8kWJ2N/image.webp)
 
 ---
@@ -390,27 +350,20 @@ Make ScriptFlow truly yours with custom backgrounds:
 ## Support Development
 
 If ScriptFlow makes your life easier, consider buying me a coffee!
+
 > ScriptFlow will **always** remain free and open source.
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/kusoi)
 
 Your support helps me:
-- Build new features 
-- Fix bugs faster 
-- Keep it free and open source  
+- Build new features
+- Fix bugs faster
+- Keep it free and open source
 
 ---
 
-
 **Author:** Kusoi
 
-**License:** Source-available, free to use
+**Discord Server:** https://discord.com/invite/gwC7KW3j7v
 
-**Status:** Actively maintained
-
-**Bug-Reports:** Report in my discord: ouka.js  
-
-**Discord-Server:** https://discord.com/invite/gwC7KW3j7v  
-
-If it saves you time, star it.
-If it doesn’t, don’t.
+---
