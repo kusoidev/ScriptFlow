@@ -640,11 +640,11 @@ class ScriptFlowPopup {
         try {
             const response = await chrome.runtime.sendMessage({
                 action: 'deleteScript',
-                scriptId: scriptId
+                scriptId,
             });
 
             if (!response || !response.success) {
-                throw new Error('Failed to unregister script');
+                throw new Error(response?.error || 'Failed to unregister script');
             }
 
             await this.loadScripts();

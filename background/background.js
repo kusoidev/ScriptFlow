@@ -2128,18 +2128,37 @@ class ScriptManager {
                         });
                         break;
 
-                    case 'deleteScript':
-                        const remainingScripts = (await this.getStoredScripts()).filter(s => s.id !== request.scriptId);
+                    case 'deleteScript': {
+                        const scripts = await this.getStoredScripts();
+                        const exists = scripts.some(s => s.id === request.scriptId);
+
+                        if (!exists) {
+                            console.warn('deleteScript: script not found in storage', request.scriptId);
+                            sendResponse({
+                                success: false,
+                                error: 'not_found'
+                            });
+                            break;
+                        }
+
+                        const remainingScripts = scripts.filter(s => s.id !== request.scriptId);
                         await chrome.storage.local.set({
                             scripts: remainingScripts
                         });
-                        await chrome.userScripts.unregister({
-                            ids: [request.scriptId]
-                        });
+
+                        try {
+                            await chrome.userScripts.unregister({
+                                ids: [request.scriptId]
+                            });
+                        } catch (e) {
+                            console.warn('unregister failed, continuing anyway', e);
+                        }
+
                         sendResponse({
                             success: true
                         });
                         break;
+                    }
 
                     case 'toggleScript':
                         const allScripts = await this.getStoredScripts();
