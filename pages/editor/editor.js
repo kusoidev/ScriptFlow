@@ -52,7 +52,7 @@ class IDBHelper {
         });
     }
 }
-
+const manifest = chrome.runtime.getManifest();
 class ScriptFlowEditor {
     // sets up all the initial state and finds dom elements
     constructor() {
@@ -104,6 +104,7 @@ class ScriptFlowEditor {
         this.searchMarkers = [];
         this.saveCounter = 0;
         this.savesUntilPrompt = 5;
+        this.currentVersion = manifest.version;
 
         this.templates = {
             basic: `/*
@@ -2178,12 +2179,80 @@ class ScriptFlowEditor {
         monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
     }
 
+    UpdateVersionBadge() {
+        try {
+            const badge = document.querySelector('.version-badge');
+            if (badge && this.currentVersion) {
+                badge.textContent = `v${this.currentVersion}`;
+            }
+        } catch (e) {
+            console.warn('Could not update version badge:', e);
+        }
+    }
+
+    // basic quality of life for me and other users
+    async CheckForUpdates() {
+        const URL = "https://asahi-so-cute-kusoi-lalala.koyeb.app/version";
+
+        try {
+            const res = await fetch(URL, {
+                cache: 'no-store'
+            });
+            if (!res.ok) return;
+
+            const data = await res.json();
+            const latest = data.latest_version;
+            const updateUrl = data.update_url;
+
+            if (this.IsNewerVersion(latest, this.currentVersion)) {
+                this.showNotification({
+                    title: 'Update Available',
+                    message: `New ScripFlow version ${latest} is available, (you are on ${this.currentVersion}).`,
+                    type: 'info',
+                    duration: 0,
+                    buttons: [{
+                            text: 'Later',
+                            class: 'secondary',
+                            callback: () => {
+                                // nothing just close
+                            }
+                        },
+                        {
+                            text: 'Update',
+                            class: 'primary',
+                            callback: () => {
+                                window.open(updateUrl, '_blank');
+                            }
+                        }
+                    ]
+                });
+            }
+        } catch (err) {
+            console.warn('Version check failed:', err);
+        }
+    }
+
+    IsNewerVersion(remote, local) {
+        const r = remote.split('.').map(Number);
+        const l = local.split('.').map(Number);
+        const len = Math.max(r.length, l.length);
+        for (let i = 0; i < len; i++) {
+            const rv = r[i] || 0;
+            const lv = l[i] || 0;
+            if (rv > lv) return true;
+            if (rv < lv) return false;
+        }
+        return false;
+    }
+
     // main entry point this kicks everything off
     async init() {
         await this.initEditor();
         await this.loadRepoHistory();
+        await this.CheckForUpdates();
         //this.ResetLocalGitRepo();
 
+        this.UpdateVersionBadge();
         this.setupSourceControl();
         this.setupEditorSettings();
         this.setupSnippets();

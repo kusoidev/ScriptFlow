@@ -1,8 +1,10 @@
+const manifest = chrome.runtime.getManifest();
 class ScriptFlowPopup {
     constructor() {
         this.currentTab = 'scripts';
         this.scripts = [];
         this.currentUrl = '';
+        this.currentVersion = manifest.version;
         this.init();
     }
 
@@ -13,6 +15,19 @@ class ScriptFlowPopup {
         this.setupEventListeners();
         this.SetUpUserScriptImport();
         this.renderScripts();
+        this.UpdateVersionBadge();
+    }
+
+    UpdateVersionBadge() {
+        try {
+            // literally copy n paste but i couildnt care less
+            const badge = document.querySelector('.settings-footer p');
+            if (badge && this.currentVersion) {
+                badge.textContent = `v${this.currentVersion}`;
+            }
+        } catch (e) {
+            console.warn('Could not update version badge:', e);
+        }
     }
 
     async loadCurrentUrl() {
