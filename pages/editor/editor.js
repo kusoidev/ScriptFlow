@@ -70,6 +70,10 @@ class ScriptFlowEditor {
         this.workspaceHandle = null;
         this.idb = new IDBHelper('ScriptFlowDB', 3);
         this.projectEntryPoint = null;
+        
+        // this might be dead weight, but for now ima keep it as i have a plan for it soon
+        this.lastGitRepoUrl = null;
+        this.lastGitBranch = null;
 
         this.fileCache = new Map();
         this.largeFileSize = 200 * 1024;
@@ -710,6 +714,12 @@ class ScriptFlowEditor {
                     depth: 1,
                     onAuth: () => this.getAuth()
                 });
+                this.lastGitRepoUrl = url;
+                this.lastGitBranch = branch;
+                chrome.storage.local.set({
+                    lastGitRepoUrl: repoUrl,
+                    lastGitBranch: branch
+                });
             }
 
             this.logGit('Fetching...');
@@ -851,21 +861,53 @@ class ScriptFlowEditor {
                 console.warn('syncWorkspaceToGit: No valid repo URL, using local-only git dir');
             }
 
+            let needsReinit = false;
             try {
                 await this.gitFS.stat(gitDir);
+                
+                try {
+                    await this.gitFS.stat(`${gitDir}/.git`);
+                    
+                    const remotes = await this.git.listRemotes({
+                        fs: this.fs,
+                        dir: gitDir
+                    });
+                    
+                    const origin = remotes.find(r => r.remote === 'origin');
+                    
+                    // if remote doesnt match current URL then reinit
+                    if (origin && repoUrl && origin.url !== repoUrl) {
+                        console.log(`Remote URL mismatch: ${origin.url} vs ${repoUrl} - reinitializing`);
+                        needsReinit = true;
+                    }
+                } catch (e) {
+                    needsReinit = true;
+                }
             } catch (e) {
-                await this.gitFS.mkdir(gitDir);
+                needsReinit = true;
             }
 
-            let hasGit = true;
+            if (needsReinit) {
+                this.logGit('Reinitializing Git repository for new remote...');
+                
+                try {
+                    await this.deleteRecursive(gitDir);
+                } catch (e) {
+                    // ignore
+                }
+            }
+
+            let hasGit = false;
             try {
                 await this.gitFS.stat(`${gitDir}/.git`);
+                hasGit = true;
             } catch (e) {
                 hasGit = false;
             }
 
             if (repoUrl) {
                 if (!hasGit) {
+                    this.logGit(`Cloning ${repoUrl}...`);
                     await this.git.clone({
                         fs: this.fs,
                         http: this.http,
@@ -873,8 +915,14 @@ class ScriptFlowEditor {
                         url: repoUrl,
                         ref: branch,
                         singleBranch: true,
-                        //depth: 1,
+                        depth: 1,
                         onAuth: () => this.getAuth()
+                    });
+                    this.lastGitRepoUrl = repoUrl;
+                    this.lastGitBranch = branch;
+                    chrome.storage.local.set({
+                        lastGitRepoUrl: repoUrl,
+                        lastGitBranch: branch
                     });
                 } else {
                     try {
@@ -891,21 +939,6 @@ class ScriptFlowEditor {
                                 remote: 'origin',
                                 url: repoUrl
                             });
-                        } else {
-                            const origin = remotes.find(r => r.remote === 'origin');
-                            if (origin.url !== repoUrl) {
-                                await this.git.deleteRemote({
-                                    fs: this.fs,
-                                    dir: gitDir,
-                                    remote: 'origin'
-                                });
-                                await this.git.addRemote({
-                                    fs: this.fs,
-                                    dir: gitDir,
-                                    remote: 'origin',
-                                    url: repoUrl
-                                });
-                            }
                         }
                     } catch (remoteErr) {
                         console.warn('syncWorkspaceToGit: Remote configuration:', remoteErr);
@@ -918,7 +951,6 @@ class ScriptFlowEditor {
                             dir: gitDir,
                             ref: branch,
                             singleBranch: true,
-                            //depth: 1,
                             onAuth: () => this.getAuth()
                         });
 
@@ -940,6 +972,12 @@ class ScriptFlowEditor {
                     }
                 }
             } else if (!hasGit) {
+
+                try {
+                    await this.gitFS.mkdir(gitDir, { recursive: true });
+                } catch (e) {
+                    // ignore
+                }
                 await this.git.init({
                     fs: this.fs,
                     dir: gitDir
@@ -953,10 +991,12 @@ class ScriptFlowEditor {
             }
 
             await this.copyToFS(this.workspaceHandle, gitDir, false);
+            
         } catch (err) {
             console.error('Error syncing workspace to git:', err);
             throw err;
         }
+        this.logGit(`Done.`);
     }
 
     renderSourceControl() {
@@ -1291,6 +1331,13 @@ class ScriptFlowEditor {
             this.setStatus('No valid GitHub repository URL configured.', true, 'error');
             return;
         }
+
+        this.lastGitRepoUrl = repoUrl;
+        this.lastGitBranch = branch;
+        chrome.storage.local.set({
+            lastGitRepoUrl: repoUrl,
+            lastGitBranch: branch
+        });
 
         const gitDir = this.getGitDir();
 
@@ -2245,8 +2292,19 @@ class ScriptFlowEditor {
         return false;
     }
 
+    async LoadLastGitConfig() {
+        try {
+            const data = await chrome.storage.local.get(['lastGitRepoUrl', 'lastGitBranch']);
+            this.lastGitRepoUrl = data.lastGitRepoUrl || null;
+            this.lastGitBranch = data.lastGitBranch || 'main';
+        } catch (e) {
+            console.warn('Failed to load lastGitRepoUrl', e);
+        }
+    }
+
     // main entry point this kicks everything off
     async init() {
+        await this.LoadLastGitConfig();
         await this.initEditor();
         await this.loadRepoHistory();
         await this.CheckForUpdates();
@@ -6329,7 +6387,12 @@ ${JSON.stringify(meta, null, 2)}
                             this.logGit(`Branch '${tryBranch}' failed: ${branchError.message}`);
                         }
                     }
-
+                    this.lastGitRepoUrl = url;
+                    this.lastGitBranch = branch;
+                    chrome.storage.local.set({
+                        lastGitRepoUrl: url,
+                        lastGitBranch: branch
+                    });
                     if (!success) {
                         throw new Error(`All attempts failed. Original: ${firstError.message}`);
                     }

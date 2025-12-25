@@ -1,74 +1,72 @@
 {
-  "manifest_version": 3,
-  "name": "ScriptFlow",
-  "version": "1.16.4",
-  "description": "Simple code editor and injector.",
-  "permissions": [
-    "storage",
-    "activeTab",
-    "scripting",
-    "userScripts",
-    "webNavigation"
-  ],
-  "icons": {
-    "16": "assets/scriptFlow1.png",
-    "32": "assets/scriptFlow1.png",
-    "48": "assets/scriptFlow1.png",
-    "128": "assets/scriptFlow1.png"
-  },
-  "host_permissions": [
-    "<all_urls>"
-  ],
-  "background": {
-    "service_worker": "background/background.js",
-    "type": "module"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": ["content/link-interceptor.js"],
-      "run_at": "document_end"
+    "manifest_version": 3,
+    "name": "ScriptFlow",
+    "version": "1.16.4",
+    "description": "Simple code editor and injector.",
+    "permissions": [
+        "storage",
+        "activeTab",
+        "scripting",
+        "userScripts",
+        "webNavigation"
+    ],
+    "icons": {
+        "16": "assets/scriptFlow1.png",
+        "32": "assets/scriptFlow1.png",
+        "48": "assets/scriptFlow1.png",
+        "128": "assets/scriptFlow1.png"
     },
-    {
-      "matches": [
+    "host_permissions": [
         "<all_urls>"
-      ],
-      "js": [
-        "content-bridge.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true
-    }
-  ],
-  "action": {
-    "default_popup": "pages/popup/popup.html",
-    "default_title": "ScriptFlow Manager"
-  },
-  "options_page": "pages/options/options.html",
-  "web_accessible_resources": [
-    {
-      "resources": ["lib/vs/**"],
-      "matches": ["<all_urls>"]
+    ],
+    "background": {
+        "service_worker": "background/background.js",
+        "type": "module"
     },
-    {
-      "resources": [
-        "injected.js",
-        "standalone.js",
-        "parser-babel.js",
-        "pages/preview/preview.html",
-        "pages/preview/preview.js"
-      ],
-      "matches": ["<all_urls>"]
+    "content_scripts": [{
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": ["content/link-interceptor.js"],
+            "run_at": "document_end"
+        },
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "content-bridge.js"
+            ],
+            "run_at": "document_start",
+            "all_frames": true
+        }
+    ],
+    "action": {
+        "default_popup": "pages/popup/popup.html",
+        "default_title": "ScriptFlow Manager"
+    },
+    "options_page": "pages/options/options.html",
+    "web_accessible_resources": [{
+            "resources": ["lib/vs/**"],
+            "matches": ["<all_urls>"]
+        },
+        {
+            "resources": [
+                "injected.js",
+                "standalone.js",
+                "parser-babel.js",
+                "pages/preview/preview.html",
+                "pages/preview/preview.js"
+            ],
+            "matches": ["<all_urls>"]
+        }
+    ],
+    "sandbox": {
+        "pages": [
+            "pages/preview/preview.html"
+        ]
+    },
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'; worker-src 'self';"
     }
-  ],
-  "sandbox": {
-    "pages": [
-      "pages/preview/preview.html"
-    ]
-  },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; worker-src 'self';"
-  }
 }
