@@ -842,7 +842,7 @@ class ScriptFlowEditor {
         }
 
         try {
-            const gitDir = this.gitDir;
+            const gitDir = this.getGitDir();
             const repoUrl = document.getElementById('repoUrl')?.value?.trim();
             let branch = document.getElementById('branch')?.value?.trim() || 'main';
 
@@ -872,7 +872,7 @@ class ScriptFlowEditor {
                         url: repoUrl,
                         ref: branch,
                         singleBranch: true,
-                        depth: 1,
+                        //depth: 1,
                         onAuth: () => this.getAuth()
                     });
                 } else {
@@ -917,7 +917,7 @@ class ScriptFlowEditor {
                             dir: gitDir,
                             ref: branch,
                             singleBranch: true,
-                            depth: 1,
+                            //depth: 1,
                             onAuth: () => this.getAuth()
                         });
 
@@ -1399,6 +1399,7 @@ class ScriptFlowEditor {
                     name: 'ScriptFlow',
                     email: 'bot@scriptflow.app',
                 },
+                ref: branch
             });
             this.logGit(`Committed ${sha.substring(0, 7)}`);
             this.showNotification({
@@ -1462,6 +1463,22 @@ class ScriptFlowEditor {
 
             try {
                 result = await this.git.push(pushOptions);
+                // ignore, just a bunch of debugging code to see what went wrong
+                const remoteMain = await this.git.resolveRef({
+                    fs: this.fs,
+                    dir: gitDir,
+                    ref: 'origin/main',
+                }).catch(() => null);
+
+                const localMain = await this.git.resolveRef({
+                    fs: this.fs,
+                    dir: gitDir,
+                    ref: 'main',
+                }).catch(() => null);
+
+                this.logGit(`Local main:  ${localMain}`);
+                this.logGit(`Remote main: ${remoteMain}`);
+                this.logGit(`Push result: ${JSON.stringify(result, null, 2)}`);
             } catch (err) {
                 const isNonFastForward = /non-fast-forward|fast-forward/i.test(err?.message || '');
                 const isRejectedRef = /rejected.*refs\/heads\/.+failed/i.test(err?.message || '');
