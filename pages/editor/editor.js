@@ -768,12 +768,12 @@ class ScriptFlowEditor {
     async refreshSourceControl() {
         const scPanel = document.getElementById('sourceControlPanel');
         if (!scPanel) return;
-        
+
         const repoUrl = document.getElementById('repoUrl')?.value?.trim();
         const hasRepoUrl = repoUrl && repoUrl.startsWith('https');
-        
-        if (this.mode !== 'git' && 
-            this.mode !== 'multi-file-edit' && 
+
+        if (this.mode !== 'git' &&
+            this.mode !== 'multi-file-edit' &&
             !(this.mode === 'workspace' && hasRepoUrl)) {
             scPanel.innerHTML = `<div style="padding: 10px; color: var(--muted); font-style: italic; font-size: 14px;">
                 Source control is only available when a Git repository is cloned or a workspace/project with GitHub repo is configured.
@@ -809,7 +809,10 @@ class ScriptFlowEditor {
             }
 
             const gitDir = this.getGitDir();
-            const status = await this.git.statusMatrix({ fs: this.fs, dir: gitDir });
+            const status = await this.git.statusMatrix({
+                fs: this.fs,
+                dir: gitDir
+            });
 
             this.sourceControl.changedFiles = status
                 .filter(([filepath, head, workdir, stage]) => {
@@ -835,48 +838,111 @@ class ScriptFlowEditor {
 
     async syncWorkspaceToGit() {
         if (!this.workspaceHandle) {
-            console.warn('syncWorkspaceToGit: No workspace handle');
             return;
         }
 
         try {
             const gitDir = this.gitDir;
-            const repoUrl = document.getElementById('repoUrl').value;
-            
+            const repoUrl = document.getElementById('repoUrl')?.value?.trim();
+            let branch = document.getElementById('branch')?.value?.trim() || 'main';
+
+            if (!repoUrl || !repoUrl.startsWith('https')) {
+                console.warn('syncWorkspaceToGit: No valid repo URL, using local-only git dir');
+            }
+
+            try {
+                await this.gitFS.stat(gitDir);
+            } catch (e) {
+                await this.gitFS.mkdir(gitDir);
+            }
+
+            let hasGit = true;
             try {
                 await this.gitFS.stat(`${gitDir}/.git`);
             } catch (e) {
-                await this.gitFS.mkdir(gitDir);
-                await this.git.init({ fs: this.fs, dir: gitDir });
+                hasGit = false;
             }
 
             if (repoUrl) {
-                try {
-                    const remotes = await this.git.listRemotes({ fs: this.fs, dir: gitDir });
-                    const hasOrigin = remotes.some(r => r.remote === 'origin');
-                    
-                    if (!hasOrigin) {
-                        await this.git.addRemote({
+                if (!hasGit) {
+                    await this.git.clone({
+                        fs: this.fs,
+                        http: this.http,
+                        dir: gitDir,
+                        url: repoUrl,
+                        ref: branch,
+                        singleBranch: true,
+                        depth: 1,
+                        onAuth: () => this.getAuth()
+                    });
+                } else {
+                    try {
+                        const remotes = await this.git.listRemotes({
                             fs: this.fs,
-                            dir: gitDir,
-                            remote: 'origin',
-                            url: repoUrl
+                            dir: gitDir
                         });
-                    } else {
-                        const origin = remotes.find(r => r.remote === 'origin');
-                        if (origin.url !== repoUrl) {
-                            await this.git.deleteRemote({ fs: this.fs, dir: gitDir, remote: 'origin' });
+                        const hasOrigin = remotes.some(r => r.remote === 'origin');
+
+                        if (!hasOrigin) {
                             await this.git.addRemote({
                                 fs: this.fs,
                                 dir: gitDir,
                                 remote: 'origin',
                                 url: repoUrl
                             });
+                        } else {
+                            const origin = remotes.find(r => r.remote === 'origin');
+                            if (origin.url !== repoUrl) {
+                                await this.git.deleteRemote({
+                                    fs: this.fs,
+                                    dir: gitDir,
+                                    remote: 'origin'
+                                });
+                                await this.git.addRemote({
+                                    fs: this.fs,
+                                    dir: gitDir,
+                                    remote: 'origin',
+                                    url: repoUrl
+                                });
+                            }
                         }
+                    } catch (remoteErr) {
+                        console.warn('syncWorkspaceToGit: Remote configuration:', remoteErr);
                     }
-                } catch (remoteErr) {
-                    console.warn('Remote configuration:', remoteErr);
+
+                    try {
+                        await this.git.fetch({
+                            fs: this.fs,
+                            http: this.http,
+                            dir: gitDir,
+                            ref: branch,
+                            singleBranch: true,
+                            depth: 1,
+                            onAuth: () => this.getAuth()
+                        });
+
+                        const remoteRef = `origin/${branch}`;
+                        const oid = await this.git.resolveRef({
+                            fs: this.fs,
+                            dir: gitDir,
+                            ref: remoteRef
+                        });
+
+                        await this.git.checkout({
+                            fs: this.fs,
+                            dir: gitDir,
+                            ref: oid,
+                            force: true
+                        });
+                    } catch (fetchErr) {
+                        console.warn('syncWorkspaceToGit: Fetch/checkout error:', fetchErr);
+                    }
                 }
+            } else if (!hasGit) {
+                await this.git.init({
+                    fs: this.fs,
+                    dir: gitDir
+                });
             }
 
             const entries = await this.gitFS.readdir(gitDir);
@@ -885,9 +951,7 @@ class ScriptFlowEditor {
                 await this.deleteRecursive(`${gitDir}/${entry}`);
             }
 
-            console.log('syncWorkspaceToGit: Copying workspace files...');
             await this.copyToFS(this.workspaceHandle, gitDir, false);
-            console.log('syncWorkspaceToGit: Sync complete');
         } catch (err) {
             console.error('Error syncing workspace to git:', err);
             throw err;
@@ -1189,116 +1253,344 @@ class ScriptFlowEditor {
         });
     }
 
-    async commitChanges(andPush = false) {
-        if (this.sourceControl.stagedFiles.size === 0) {
-            this.setStatus('No files staged for commit');
-            return;
-        }
-
-        if (!this.sourceControl.commitMessage.trim()) {
-            this.setStatus('Commit message required');
-            return;
-        }
+    // i beg JUST be fixed
+    async ResetLocalGitRepo() {
+        const gitDir = this.gitDir;
 
         try {
+            await this.gitFS.rmdir(gitDir, {
+                recursive: true
+            });
+        } catch (e) {
+            console.warn('resetLocalGitRepo: rmdir failed', e);
+        }
 
-            if (this.mode === 'workspace') {
+        await this.gitFS.mkdir(gitDir).catch(() => {});
+
+        await this.git.init({
+            fs: this.fs,
+            dir: gitDir,
+            defaultBranch: 'main',
+        });
+
+        this.logGit('Local /repo reset and re‑initialized.');
+    }
+
+    async commitChanges(pushAfter = false) {
+        const scPanel = document.getElementById('sourceControlPanel');
+        if (!scPanel) return;
+
+        const repoUrlInput = document.getElementById('repoUrl');
+        const branchInput = document.getElementById('branch');
+
+        const repoUrl = repoUrlInput?.value?.trim();
+        let branch = branchInput?.value?.trim() || 'main';
+
+        if (!repoUrl || !repoUrl.startsWith('https')) {
+            this.setStatus('No valid GitHub repository URL configured.', true, 'error');
+            return;
+        }
+
+        const gitDir = this.getGitDir();
+
+        this.gitModal.classList.add('visible');
+        this.logGit('Preparing commit...');
+
+        try {
+            if (this.mode === 'workspace' && this.workspaceHandle) {
                 await this.syncWorkspaceToGit();
             } else if (this.mode === 'multi-file-edit') {
                 await this.syncMultiFileToGit();
             }
 
-            const gitDir = this.getGitDir();
+            try {
+                await this.gitFS.stat(`${gitDir}/.git`);
+            } catch (e) {
+                await this.git.init({
+                    fs: this.fs,
+                    dir: gitDir
+                });
+            }
 
-            for (const filepath of this.sourceControl.stagedFiles) {
-                const file = this.sourceControl.changedFiles.find(f => f.path === filepath);
-                if (file?.status === 'deleted') {
-                    await this.git.remove({ fs: this.fs, dir: gitDir, filepath: filepath });
+            try {
+                const remotes = await this.git.listRemotes({
+                    fs: this.fs,
+                    dir: gitDir
+                });
+                const hasOrigin = remotes.some(r => r.remote === 'origin');
+                if (!hasOrigin) {
+                    await this.git.addRemote({
+                        fs: this.fs,
+                        dir: gitDir,
+                        remote: 'origin',
+                        url: repoUrl,
+                    });
                 } else {
-                    await this.git.add({ fs: this.fs, dir: gitDir, filepath: filepath });
+                    const origin = remotes.find(r => r.remote === 'origin');
+                    if (origin.url !== repoUrl) {
+                        await this.git.deleteRemote({
+                            fs: this.fs,
+                            dir: gitDir,
+                            remote: 'origin'
+                        });
+                        await this.git.addRemote({
+                            fs: this.fs,
+                            dir: gitDir,
+                            remote: 'origin',
+                            url: repoUrl,
+                        });
+                    }
+                }
+            } catch (remoteErr) {
+                this.logGit('Remote configuration warning: ' + remoteErr.message);
+            }
+
+            this.logGit('Staging files...');
+            const status = await this.git.statusMatrix({
+                fs: this.fs,
+                dir: gitDir
+            });
+
+            let hasChanges = false;
+            for (const row of status) {
+                const filepath = row[0];
+                const head = row[1];
+                const workdir = row[2];
+
+                if (this.sourceControl.stagedFiles.size > 0 &&
+                    !this.sourceControl.stagedFiles.has(filepath)) {
+                    continue;
+                }
+
+                if (head === 0 && workdir === 0) continue;
+
+                if (workdir === 0) {
+                    await this.git.remove({
+                        fs: this.fs,
+                        dir: gitDir,
+                        filepath
+                    });
+                    this.logGit(` - Staged deletion: ${filepath}`);
+                    hasChanges = true;
+                } else if (workdir === 2 || workdir === 3) {
+                    await this.git.add({
+                        fs: this.fs,
+                        dir: gitDir,
+                        filepath
+                    });
+                    this.logGit(` - Staged change: ${filepath}`);
+                    hasChanges = true;
                 }
             }
 
+            if (!hasChanges) {
+                this.logGit('No changes to commit.');
+                this.gitModal.classList.remove('visible');
+                return;
+            }
+
+            const commitMsg = this.sourceControl.commitMessage?.trim() || 'Update from ScriptFlow';
+            this.logGit('Committing...');
             const sha = await this.git.commit({
                 fs: this.fs,
                 dir: gitDir,
-                message: this.sourceControl.commitMessage,
-                author: { name: 'ScriptFlow', email: 'bot@scriptflow.app' }
+                message: commitMsg,
+                author: {
+                    name: 'ScriptFlow',
+                    email: 'bot@scriptflow.app',
+                },
+            });
+            this.logGit(`Committed ${sha.substring(0, 7)}`);
+            this.showNotification({
+                title: 'Success',
+                message: `Committed ${sha.substring(0, 7)}`,
+                type: 'success',
+                duration: 4000,
             });
 
-            this.setStatus(`Committed ${sha.substring(0, 7)}`, true, 'success');
-            this.sourceControl.stagedFiles.clear();
-            this.sourceControl.commitMessage = '';
+            if (!pushAfter) {
+                this.gitModal.classList.remove('visible');
+                await this.refreshSourceControl?.();
+                return;
+            }
 
-            if (andPush) {
-                this.logGit('Pushing...');
-
-                let branch = 'main';
-                if (this.mode === 'multi-file-edit' && this.script?.githubRepo?.branch) {
-                    branch = this.script.githubRepo.branch;
-                } else {
-                    branch = document.getElementById('branch')?.value?.trim() || 'main';
-                }
-
-                try {
-                    await this.git.branch({ fs: this.fs, dir: gitDir, ref: branch, checkout: true });
-                } catch (e) {
-                    try {
-                        await this.git.checkout({ fs: this.fs, dir: gitDir, ref: branch });
-                    } catch (checkoutErr) {
-                        console.warn('Branch handling:', checkoutErr);
-                    }
-                }
-
-                const pushOptions = {
+            this.logGit(`Ensuring branch '${branch}' exists...`);
+            try {
+                const branches = await this.git.listBranches({
                     fs: this.fs,
-                    http: this.http,
-                    dir: gitDir,
-                    onAuth: () => this.getAuth(),
-                    force: true,
-                    ref: branch
-                };
-
-                if (this.editorSettings.useCorsProxy) {
-                    pushOptions.corsProxy = 'https://cors.isomorphic-git.org';
+                    dir: gitDir
+                });
+                if (!branches.includes(branch)) {
+                    const headOid = await this.git.resolveRef({
+                        fs: this.fs,
+                        dir: gitDir,
+                        ref: 'HEAD'
+                    });
+                    await this.git.writeRef({
+                        fs: this.fs,
+                        dir: gitDir,
+                        ref: `refs/heads/${branch}`,
+                        value: headOid,
+                        force: false,
+                    });
                 }
+                await this.git.checkout({
+                    fs: this.fs,
+                    dir: gitDir,
+                    ref: branch
+                });
+            } catch (branchErr) {
+                this.logGit('Branch setup warning: ' + branchErr.message);
+            }
 
-                const result = await this.git.push(pushOptions);
+            this.logGit(`Pushing to origin/${branch}...`);
+            const pushOptions = {
+                fs: this.fs,
+                http: this.http,
+                dir: gitDir,
+                remote: 'origin',
+                ref: branch,
+                force: true,
+                onAuth: () => this.getAuth(),
+            };
+            if (this.editorSettings?.useCorsProxy) {
+                pushOptions.corsProxy = 'https://cors.isomorphic-git.org';
+            }
 
-                if (result?.ok) {
-                    this.logGit('Push successful!');
-                    this.saveCounter = 0;
-                    
-                    let url;
-                    if (this.mode === 'multi-file-edit' && this.script?.githubRepo?.url) {
-                        url = this.script.githubRepo.url;
-                        this.script.githubRepo.lastPush = Date.now();
-                        await chrome.runtime.sendMessage({ action: 'saveScript', script: this.script });
-                    } else {
-                        url = document.getElementById('repoUrl')?.value;
-                    }
-                    
-                    if (url) {
-                        await this.updateRepoHistory(url);
-                    }
+            let autoFixed = false;
+            let result;
 
-                    if (this.mode === 'multi-file-edit') {
-                        await this.syncGitToMultiFile();
+            try {
+                result = await this.git.push(pushOptions);
+            } catch (err) {
+                const isNonFastForward = /non-fast-forward|fast-forward/i.test(err?.message || '');
+                const isRejectedRef = /rejected.*refs\/heads\/.+failed/i.test(err?.message || '');
+                if (isNonFastForward || isRejectedRef) {
+                    autoFixed = true;
+                    this.logGit('Push rejected (non-fast-forward). Auto-syncing with remote...');
+
+                    try {
+                        await this.git.fetch({
+                            fs: this.fs,
+                            http: this.http,
+                            dir: gitDir,
+                            remote: 'origin',
+                            ref: branch,
+                            singleBranch: true,
+                            depth: 1,
+                            onAuth: () => this.getAuth(),
+                        });
+
+                        const remoteRef = `origin/${branch}`;
+                        const remoteOid = await this.git.resolveRef({
+                            fs: this.fs,
+                            dir: gitDir,
+                            ref: remoteRef,
+                        });
+
+                        const localOid = await this.git.resolveRef({
+                            fs: this.fs,
+                            dir: gitDir,
+                            ref: branch,
+                        });
+
+                        if (remoteOid !== localOid) {
+                            this.logGit('Merging remote changes into local branch...');
+                            await this.git.merge({
+                                fs: this.fs,
+                                dir: gitDir,
+                                ours: branch,
+                                theirs: remoteRef,
+                                fastForwardOnly: false,
+                                author: {
+                                    name: 'ScriptFlow',
+                                    email: 'bot@scriptflow.app',
+                                },
+                            });
+                        }
+
+                        // recommit if working tree changed
+                        const postStatus = await this.git.statusMatrix({
+                            fs: this.fs,
+                            dir: gitDir
+                        });
+                        let hasNewChanges = false;
+                        for (const row of postStatus) {
+                            const head = row[1];
+                            const workdir = row[2];
+                            const stage = row[3];
+                            if (workdir !== head || stage !== head) {
+                                hasNewChanges = true;
+                                break;
+                            }
+                        }
+
+                        if (hasNewChanges) {
+                            this.logGit('Re-committing after merge...');
+                            const fixSha = await this.git.commit({
+                                fs: this.fs,
+                                dir: gitDir,
+                                message: commitMsg,
+                                author: {
+                                    name: 'ScriptFlow',
+                                    email: 'bot@scriptflow.app',
+                                },
+                            });
+                            this.logGit(`Re-committed ${fixSha.substring(0, 7)}`);
+                        }
+
+                        this.logGit('Retrying push...');
+                        result = await this.git.push({
+                            ...pushOptions,
+                            force: false
+                        });
+                    } catch (syncErr) {
+                        throw syncErr;
                     }
-                    
-                    this.setStatus('Committed and pushed!', true, 'success');
                 } else {
-                    const error = result.errors ? result.errors.join(', ') : 'Unknown error';
-                    throw new Error(error);
+                    throw err;
                 }
             }
 
-            await this.refreshSourceControl();
+            if (!result?.ok) {
+                const errorText = result?.errors ? result.errors.join(', ') : 'No response';
+                throw new Error(`Push failed: ${errorText}`);
+            }
+
+            this.logGit('Push successful!');
+            this.saveCounter = 0;
+
+            this.setStatus(
+                autoFixed ? 'Committed and pushed after auto-fix.' : 'Committed and pushed!',
+                true,
+                'success'
+            );
+
+            this.showNotification({
+                title: autoFixed ? 'Push Fixed Automatically' : 'Push Successful',
+                message: autoFixed ?
+                    'Your push initially failed, but ScriptFlow synced with the remote and retried successfully.' : 'Your changes were committed and pushed to GitHub.',
+                type: 'success',
+                duration: 6000,
+            });
+
+            await this.updateRepoHistory(repoUrl);
+            await this.refreshSourceControl?.();
+            this.gitModal.classList.remove('visible');
         } catch (err) {
-            console.error('Commit/Push error:', err);
-            this.setStatus(`Commit/Push failed: ${err.message}`, true, 'error');
-            this.logGit(`ERROR: ${err.message}`);
-            await this.refreshSourceControl();
+            this.logGit('ERROR ' + (err.message || 'Unknown error'));
+            console.error(err);
+            this.setStatus('Commit/Push failed: ' + (err.message || 'Unknown error'), true, 'error');
+
+            this.showNotification({
+                title: 'Push Failed',
+                message: err.message || 'Unknown Git error',
+                type: 'error',
+                duration: 8000,
+            });
+
+            await this.refreshSourceControl?.();
+            this.gitModal.classList.remove('visible');
         }
     }
 
@@ -1873,6 +2165,7 @@ class ScriptFlowEditor {
     async init() {
         await this.initEditor();
         await this.loadRepoHistory();
+        //this.ResetLocalGitRepo();
 
         this.setupSourceControl();
         this.setupEditorSettings();
@@ -2592,13 +2885,22 @@ class ScriptFlowEditor {
                 }
                 if (this.mode === 'git' && this.gitFS) {
                     try {
-                        const fullPath = `${this.gitDir}/${path}`;
-                        if (path.match(/\.(png|jpg|jpeg|gif|ico|svg)$/i)) {
-                            return await this.gitFS.readFile(fullPath);
+                        let targetPath = path;
+
+                        if (!targetPath.startsWith(this.gitDir)) {
+                            const cleanPath = targetPath.startsWith('/') ? targetPath.slice(1) : targetPath;
+                            targetPath = `${this.gitDir}/${cleanPath}`;
                         }
-                        return await this.gitFS.readFile(fullPath, 'utf8');
+
+                        if (path.match(/\.(png|jpg|jpeg|gif|ico|svg)$/i)) {
+                            return await this.gitFS.readFile(targetPath);
+                        }
+                        return await this.gitFS.readFile(targetPath, 'utf8');
                     } catch (e) {
-                        /* ignore cuz not important */ }
+                        // need to see what error is causing it to not work
+                        // edit: actually nvm already found the bug
+                        //console.warn('Preview file not found:', path);
+                    }
                 }
                 if (this.mode === 'workspace' && this.workspaceHandle) {
                     try {
@@ -3555,16 +3857,18 @@ ${JSON.stringify(meta, null, 2)}
         const data = await this.idb.get('workspaces', 'root');
         if (data && data.handle) {
             try {
-                await data.handle.requestPermission({ mode: 'readwrite' });
+                await data.handle.requestPermission({
+                    mode: 'readwrite'
+                });
                 this.workspaceHandle = data.handle;
                 await this.initWorkspace(data.handle);
-                
+
                 const repoUrl = document.getElementById('repoUrl')?.value?.trim();
                 if (repoUrl && repoUrl.startsWith('https')) {
                     const scTab = document.querySelector('.sidebar-tab[data-tab="source-control"]');
                     if (scTab) scTab.style.display = 'block';
                 }
-                
+
                 return true;
             } catch (err) {
                 console.log('Permission denied or workspace unavailable');
@@ -4471,7 +4775,7 @@ ${JSON.stringify(meta, null, 2)}
     }
 
     // this takes a local workspace and pushes it to a new github repo
-	// new note: this doesnt look like its needed anymore so im removing it
+    // new note: this doesnt look like its needed anymore so im removing it
     /*async pushNew() {
         if (this.mode !== 'workspace' || !this.workspaceHandle) {
             this.logGit("ERROR: A workspace must be loaded first");
@@ -4845,10 +5149,10 @@ ${JSON.stringify(meta, null, 2)}
         } else if (tabName === 'source-control') {
             if (filesContent) filesContent.style.display = 'none';
             if (scContent) scContent.style.display = 'block';
-            
+
             const repoUrl = document.getElementById('repoUrl')?.value?.trim();
             const hasRepoUrl = repoUrl && repoUrl.startsWith('https');
-            
+
             if (this.mode === 'git' || this.mode === 'multi-file-edit' && this.script?.githubRepo?.url || this.mode === 'workspace' && hasRepoUrl) {
                 this.refreshSourceControl();
             }
@@ -5220,7 +5524,7 @@ ${JSON.stringify(meta, null, 2)}
         });
         document.getElementById('gitModalCloseBtn')?.addEventListener('click', () => {
             document.getElementById('gitModal').classList.remove('visible');
-            
+
             if (this.mode === 'workspace') {
                 const repoUrl = document.getElementById('repoUrl')?.value?.trim();
                 if (repoUrl && repoUrl.startsWith('https')) {
@@ -6059,34 +6363,35 @@ ${JSON.stringify(meta, null, 2)}
         }
     }
 
-    // stages all changes commits and pushes to the remote repo
+    // stages all changes, commits, and pushes to the remote repo
     async push() {
         if (this.mode !== 'git' && this.mode !== 'multi-file-edit') {
-            this.logGit("ERROR: No Git workspace or multi-file project loaded");
+            this.logGit('ERROR No Git workspace or multi-file project loaded');
             return;
         }
 
         const url = document.getElementById('repoUrl').value;
-        const branch = document.getElementById('branch').value.trim() || 'main';
+        let branch = document.getElementById('branch').value || 'main';
+        branch = branch.trim();
 
         if (!url) {
-            this.logGit('ERROR: Repository URL required');
+            this.logGit('ERROR Repository URL required');
             return;
         }
 
         try {
             let workDir = this.gitDir;
 
-            if (this.mode === 'multi-file-edit' && this.script && this.script.files) {
-                this.logGit('Syncing multi-file project to Git...');
+            if (this.mode === 'multi-file-edit') {
+                this.script.files = this.script.files || {};
 
                 if (this.currentPath && this.script.files.hasOwnProperty(this.currentPath)) {
                     this.script.files[this.currentPath] = this.editor.getValue();
                 }
 
                 await this.syncMultiFileToGit();
-
                 this.logGit('Files synced to Git workspace');
+                workDir = this.gitDir;
             }
 
             const status = await this.git.statusMatrix({
@@ -6094,120 +6399,186 @@ ${JSON.stringify(meta, null, 2)}
                 dir: workDir
             });
             let hasChanges = false;
-
             this.logGit('Staging changes...');
 
             for (const row of status) {
                 const path = row[0];
                 const workdir = row[2];
 
-                if (workdir === 0) {
-                    await this.git.remove({
-                        fs: this.fs,
-                        dir: workDir,
-                        filepath: path
-                    });
-                    this.logGit(` - Staged deletion: ${path}`);
-                    hasChanges = true;
-                } else if (workdir === 2 || workdir === 3) {
+                if (workdir === 0) continue;
+
+                if (workdir === 2 || workdir === 3) {
                     await this.git.add({
                         fs: this.fs,
                         dir: workDir,
                         filepath: path
                     });
-                    this.logGit(` - Staged change: ${path}`);
+                    this.logGit(' - Staged change', path);
+                    hasChanges = true;
+                } else if (workdir === 1) {
+                    await this.git.remove({
+                        fs: this.fs,
+                        dir: workDir,
+                        filepath: path
+                    });
+                    this.logGit(' - Staged deletion', path);
                     hasChanges = true;
                 }
             }
 
             if (!hasChanges) {
                 this.logGit('No changes to commit');
-                return;
-            }
+            } else {
+                this.logGit('Committing...');
+                const commitMsg =
+                    this.mode === 'multi-file-edit' ?
+                    `Update from ScriptFlow: ${this.script.name || 'Project'}` :
+                    'Update from ScriptFlow';
 
-            this.logGit('Committing...');
-            const commitMsg = this.mode === 'multi-file-edit' ?
-                `Update from ScriptFlow: ${this.script.name}` :
-                'update from ScriptFlow';
-
-            const sha = await this.git.commit({
-                fs: this.fs,
-                dir: workDir,
-                message: commitMsg,
-                author: {
-                    name: 'ScriptFlow',
-                    email: 'bot@scriptflow.app'
-                },
-            });
-
-            this.logGit(`Committed: ${sha.substring(0, 7)}`);
-
-            try {
-                await this.git.branch({
+                const sha = await this.git.commit({
                     fs: this.fs,
                     dir: workDir,
-                    ref: branch,
-                    checkout: true
+                    message: commitMsg,
+                    author: {
+                        name: 'ScriptFlow',
+                        email: 'bot@scriptflow.app'
+                    },
                 });
-            } catch (branchErr) {
-                try {
-                    await this.git.checkout({
-                        fs: this.fs,
-                        dir: workDir,
-                        ref: branch
-                    });
-                } catch (checkoutErr) {
-                    console.warn('Branch handling:', checkoutErr);
-                }
+
+                this.logGit('Committed', sha.substring(0, 7));
             }
 
-            this.logGit('Pushing...');
             const pushOptions = {
                 fs: this.fs,
                 http: this.http,
                 dir: workDir,
-                onAuth: () => this.getAuth(),
-                force: true,
-                ref: branch
+                remote: 'origin',
+                ref: branch,
+                force: false,
+                onAuth: this.getAuth,
             };
 
             if (this.editorSettings.useCorsProxy) {
                 pushOptions.corsProxy = 'https://cors.isomorphic-git.org';
             }
 
-            const result = await this.git.push(pushOptions);
+            this.logGit(`Pushing to origin/${branch}...`);
 
-            if (result?.ok) {
-                this.logGit('Push successful!');
-                this.saveCounter = 0;
-                await this.updateRepoHistory(url);
+            let result;
+            let autoFixed = false;
 
-                if (this.mode === 'multi-file-edit' && this.script) {
-                    this.script.githubRepo = {
-                        ...this.script.githubRepo,
-                        url,
-                        branch,
-                        lastPush: Date.now()
-                    };
-                    await chrome.runtime.sendMessage({
-                        action: 'saveScript',
-                        script: this.script
+            try {
+                result = await this.git.push(pushOptions);
+            } catch (err) {
+                const msg = String(err?.message || '').toLowerCase();
+
+                if (msg.includes('non-fast-forward') || msg.includes('not a simple fast-forward')) {
+                    autoFixed = true;
+
+                    this.showNotification({
+                        title: 'Push Failed',
+                        message: 'Git reported a non-fast-forward error. Will attempt auto-fix by syncing to remote and re-applying your changes.',
+                        type: 'warning',
+                        duration: 7000,
                     });
+
+                    await this.syncWorkspaceToGit();
+                    this.logGit('Local virtual repo reset to match remote.');
+
+                    const statusAfterSync = await this.git.statusMatrix({
+                        fs: this.fs,
+                        dir: workDir
+                    });
+
+                    let hasNewChanges = false;
+                    this.logGit('Re-staging changes after sync...');
+
+                    for (const row of statusAfterSync) {
+                        const path = row[0];
+                        const workdir = row[2];
+
+                        if (workdir === 0) continue;
+
+                        if (workdir === 2 || workdir === 3) {
+                            await this.git.add({
+                                fs: this.fs,
+                                dir: workDir,
+                                filepath: path
+                            });
+                            this.logGit(' - Re-staged change', path);
+                            hasNewChanges = true;
+                        } else if (workdir === 1) {
+                            await this.git.remove({
+                                fs: this.fs,
+                                dir: workDir,
+                                filepath: path
+                            });
+                            this.logGit(' - Re-staged deletion', path);
+                            hasNewChanges = true;
+                        }
+                    }
+
+                    if (hasNewChanges) {
+                        this.logGit('Re-committing...');
+                        const commitMsg = this.mode === 'multi-file-edit' ? `Update from ScriptFlow: ${this.script.name || 'Project'}` : 'Update from ScriptFlow';
+
+                        const sha = await this.git.commit({
+                            fs: this.fs,
+                            dir: workDir,
+                            message: commitMsg,
+                            author: {
+                                name: 'ScriptFlow',
+                                email: 'bot@scriptflow.app'
+                            },
+                        });
+
+                        this.logGit('Re-committed', sha.substring(0, 7));
+                    } else {
+                        this.logGit('No changes to re-commit after sync.');
+                    }
+
+                    this.logGit('Retrying push...');
+                    result = await this.git.push({
+                        ...pushOptions,
+                        force: false
+                    });
+                } else {
+                    throw err;
                 }
-
-                this.gitModal.classList.remove('visible');
-                this.setStatus('Push successful!', true, 'success');
-
-                await this.refreshSourceControl();
-
-            } else {
-                const error = result.errors ? result.errors.join(', ') : 'Unknown error';
-                throw new Error(error);
             }
 
-        } catch (error) {
-            this.logGit(`PUSH FAILED: ${error.message}`);
-            console.error('Push error details:', error);
+            if (!result?.ok) {
+                const errorText = result?.errors ? result.errors.join(', ') : 'No response';
+                throw new Error(`Push failed: ${errorText}`);
+            }
+
+            this.logGit('Push successful!');
+            this.saveCounter = 0;
+
+            this.setStatus(autoFixed ? 'Committed and pushed after auto-fix.' : 'Committed and pushed!', true, 'success');
+
+            this.showNotification({
+                title: autoFixed ? 'Push Fixed Automatically' : 'Push Successful',
+                message: autoFixed ? 'Your push initially failed with a non-fast-forward error, but ScriptFlow automatically synced to the remote and retried successfully.' : 'Your changes were committed and pushed to GitHub.',
+                type: 'success',
+                duration: 6000,
+            });
+
+            await this.updateRepoHistory(url);
+            await this.refreshSourceControl?.();
+        } catch (err) {
+            this.logGit('ERROR', err.message);
+            console.error(err);
+            this.setStatus('Commit/Push failed: ' + (err.message || 'Unknown error'), true, 'error');
+
+            this.showNotification({
+                title: 'Push Failed',
+                message: err.message || 'Unknown Git error',
+                type: 'error',
+                duration: 8000,
+            });
+
+            await this.refreshSourceControl?.();
         }
     }
 

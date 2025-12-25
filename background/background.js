@@ -946,7 +946,34 @@ class ScriptManager {
         `;
 
         } else {
-            userCode = script.code;
+            // testing with single file, i plan on making it for multi-file soon
+            let userCode = '';
+            let resources = {};
+            const escapeForTemplateLiteral = (str) => str ? String(str).replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$') : '';
+
+            const code = script.code || '';
+            const hasUrlImport = /import\s+[\s\S]+from\s+['"]https?:\/\/[^'";]+['"];?/.test(code) || /import\s+['"]https?:\/\/[^'";]+['"];?/.test(code);
+
+            if (hasUrlImport) {
+                userCode = `
+                    (function() {
+                        'use strict';
+                        const source = ${JSON.stringify(code)};
+                        const blob = new Blob([source], { type: 'text/javascript' });
+                        const url = URL.createObjectURL(blob);
+                        const scriptEl = document.createElement('script');
+                        scriptEl.type = 'module';
+                        scriptEl.src = url;
+                        scriptEl.addEventListener('error', (e) => {
+                            console.error('[ScriptFlow] failed to load', e);
+                        });
+                        document.documentElement.appendChild(scriptEl);
+                    })();
+                `;
+            } else {
+                userCode = code;
+            }
+            return externalScriptsCode ? externalScriptsCode + userCode : userCode;
         }
 
         const apiCode = this.buildGrantedApiScript(metadata.grant, resources, memoryInspectorEnabled, memoryInspectorPosition, debugLogging);
