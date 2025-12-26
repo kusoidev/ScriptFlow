@@ -70,7 +70,7 @@ class ScriptFlowEditor {
         this.workspaceHandle = null;
         this.idb = new IDBHelper('ScriptFlowDB', 3);
         this.projectEntryPoint = null;
-        
+
         // this might be dead weight, but for now ima keep it as i have a plan for it soon
         this.lastGitRepoUrl = null;
         this.lastGitBranch = null;
@@ -864,17 +864,17 @@ class ScriptFlowEditor {
             let needsReinit = false;
             try {
                 await this.gitFS.stat(gitDir);
-                
+
                 try {
                     await this.gitFS.stat(`${gitDir}/.git`);
-                    
+
                     const remotes = await this.git.listRemotes({
                         fs: this.fs,
                         dir: gitDir
                     });
-                    
+
                     const origin = remotes.find(r => r.remote === 'origin');
-                    
+
                     // if remote doesnt match current URL then reinit
                     if (origin && repoUrl && origin.url !== repoUrl) {
                         console.log(`Remote URL mismatch: ${origin.url} vs ${repoUrl} - reinitializing`);
@@ -889,7 +889,7 @@ class ScriptFlowEditor {
 
             if (needsReinit) {
                 this.logGit('Reinitializing Git repository for new remote...');
-                
+
                 try {
                     await this.deleteRecursive(gitDir);
                 } catch (e) {
@@ -974,7 +974,9 @@ class ScriptFlowEditor {
             } else if (!hasGit) {
 
                 try {
-                    await this.gitFS.mkdir(gitDir, { recursive: true });
+                    await this.gitFS.mkdir(gitDir, {
+                        recursive: true
+                    });
                 } catch (e) {
                     // ignore
                 }
@@ -991,7 +993,7 @@ class ScriptFlowEditor {
             }
 
             await this.copyToFS(this.workspaceHandle, gitDir, false);
-            
+
         } catch (err) {
             console.error('Error syncing workspace to git:', err);
             throw err;
@@ -2304,6 +2306,14 @@ class ScriptFlowEditor {
 
     // main entry point this kicks everything off
     async init() {
+        if (typeof chrome.userScripts === 'undefined') {
+            this.showNotification({
+                title: 'Missing API',
+                message: `You have 'UserScripts' Disabled, please enable it in Extensions > Details > "Allow User Scripts"`,
+                type: 'error',
+                duration: 0,
+            });
+        }
         await this.LoadLastGitConfig();
         await this.initEditor();
         await this.loadRepoHistory();
@@ -3269,23 +3279,31 @@ class ScriptFlowEditor {
     // initializes the monaco editor with all the settings
     initEditor() {
         return new Promise((resolve) => {
-            require.config({
-                paths: {
-                    'vs': '../../lib/vs'
-                }
-            });
-
             window.MonacoEnvironment = {
                 getWorkerUrl: function(moduleId, label) {
-                    const base = chrome.runtime.getURL('lib/vs');
+                    const extensionUrl = chrome.runtime.getURL('');
 
-                    if (label === 'json') return `${base}/language/json/json.worker.js`;
-                    if (label === 'css' || label === 'scss' || label === 'less') return `${base}/language/css/css.worker.js`;
-                    if (label === 'html' || label === 'handlebars' || label === 'razor') return `${base}/language/html/html.worker.js`;
-                    if (label === 'typescript' || label === 'javascript') return `${base}/language/typescript/ts.worker.js`;
-                    return `${base}/editor/editor.worker.js`;
+                    if (label === 'json') {
+                        return extensionUrl + 'lib/vs/language/json/json.worker.js';
+                    }
+                    if (label === 'css' || label === 'scss' || label === 'less') {
+                        return extensionUrl + 'lib/vs/language/css/css.worker.js';
+                    }
+                    if (label === 'html' || label === 'handlebars' || label === 'razor') {
+                        return extensionUrl + 'lib/vs/language/html/html.worker.js';
+                    }
+                    if (label === 'typescript' || label === 'javascript') {
+                        return extensionUrl + 'lib/vs/language/typescript/ts.worker.js';
+                    }
+                    return extensionUrl + 'lib/vs/editor/editor.worker.js';
                 }
             };
+
+            require.config({
+                paths: {
+                    vs: chrome.runtime.getURL('lib/vs')
+                }
+            });
 
             require(['vs/editor/editor.main'], () => {
                 monaco.languages.typescript.javascriptDefaults.setEagerModelSync(false);
@@ -3303,11 +3321,11 @@ class ScriptFlowEditor {
                 monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
                     target: monaco.languages.typescript.ScriptTarget.ESNext,
                     allowNonTsExtensions: false,
-                    checkJs: false,
+                    checkJs: false, // Changed to true for validation
                     allowJs: true,
                     noImplicitAny: true,
-                    strict: false,
-                    noUnusedLocals: false,
+                    strict: true,
+                    noUnusedLocals: true, // Enable to show unused variables
                     noUnusedParameters: false,
                     noImplicitReturns: false,
                     noFallthroughCasesInSwitch: false,

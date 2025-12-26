@@ -2315,6 +2315,60 @@ ${grants.length ? grants.map(g => `// @grant        ${g}`).join('\n') : '// @gra
                             });
                         }
                         break;
+                    case 'buildConsoleCode': {
+                        try {
+                            const userCode = String(request.code || '');
+                            const callbackId = String(request.callbackId || '');
+                            const grant = Array.isArray(request.grant) ? request.grant : ['*'];
+                            const require = Array.isArray(request.require) ? request.require : [];
+
+                            const meta = {
+                                grant,
+                                require,
+                                'run-at': 'document-idle'
+                            };
+
+                            const lines = [];
+                            lines.push(`/* @ScriptFlow ${JSON.stringify(meta)} */`);
+                            lines.push(`(async () => {`);
+                            lines.push(`  try {`);
+                            lines.push(`    const __sf_userFn = async () => {`);
+                            lines.push(userCode);
+                            lines.push(`    };`);
+                            lines.push(`    const __sf_result = await __sf_userFn();`);
+                            lines.push(
+                                `    if (window[${JSON.stringify(callbackId)}]) window[${JSON.stringify(callbackId)}]({` +
+                                ` success: true, result: __sf_result !== undefined ? String(__sf_result) : 'undefined', type: typeof __sf_result` +
+                                `});`
+                            );
+                            lines.push(`  } catch (e) {`);
+                            lines.push(
+                                `    if (window[${JSON.stringify(callbackId)}]) window[${JSON.stringify(callbackId)}]({` +
+                                ` success: false, error: (e && e.message) ? e.message : String(e), stack: e && e.stack` +
+                                `});`
+                            );
+                            lines.push(`  }`);
+                            lines.push(`})();`);
+
+                            const tempScript = {
+                                id: 'sf-console',
+                                type: 'single-file',
+                                code: lines.join('\n'),
+                            };
+
+                            const builtCode = await this.buildFinalCode(tempScript);
+                            sendResponse({
+                                success: true,
+                                code: builtCode
+                            });
+                        } catch (err) {
+                            sendResponse({
+                                success: false,
+                                error: err?.message || String(err)
+                            });
+                        }
+                        break;
+                    }
                     default:
                         sendResponse({
                             success: false,

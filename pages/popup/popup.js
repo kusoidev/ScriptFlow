@@ -676,12 +676,10 @@ class ScriptFlowPopup {
     async executeConsoleScript() {
         const input = document.getElementById('consoleInput');
         const output = document.getElementById('consoleOutput');
-
         if (!input || !output) return;
 
-        const code = input.value.trim();
-
-        if (!code) {
+        const userCode = input.value.trim();
+        if (!userCode) {
             output.textContent = 'Error: No code to execute';
             return;
         }
@@ -691,68 +689,70 @@ class ScriptFlowPopup {
                 active: true,
                 currentWindow: true
             });
-
             if (!tab || !tab.id) {
                 output.textContent = 'Error: No active tab found';
                 return;
             }
 
-            if (tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') ||
-                tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) {
+            if (tab.url.startsWith('chrome://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:') || tab.url.startsWith('chrome-extension://')) {
                 output.textContent = 'Error: Cannot execute scripts on browser pages';
+                return;
+            }
+
+            output.textContent = 'Building...';
+
+            const settings = await chrome.storage.sync.get(['memoryInspectorEnabled']);
+            const memoryInspectorEnabled = settings.memoryInspectorEnabled || false;
+
+            const callbackId = 'SF_CONSOLE_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+
+            const built = await chrome.runtime.sendMessage({
+                action: 'buildConsoleCode',
+                code: userCode,
+                callbackId,
+                // optional: require/grant overrides
+                // grant: ['*'],
+                // require: [],
+            });
+
+            if (!built || !built.success || !built.code) {
+                output.textContent = `Error: ${built?.error || 'Failed to build console code'}`;
                 return;
             }
 
             output.textContent = 'Executing...';
 
-            const settings = await chrome.storage.sync.get(['memoryInspectorEnabled']);
-            const memoryInspectorEnabled = settings.memoryInspectorEnabled || false;
-
             const results = await chrome.scripting.executeScript({
                 target: {
                     tabId: tab.id
                 },
-                func: (userCode, memoryInspectorEnabled) => {
+                world: 'MAIN',
+                func: (builtCode, callbackId, memoryInspectorEnabled) => {
                     return new Promise((resolve) => {
-                        const callbackId = 'SF_CONSOLE_' + Date.now() + '_' + Math.random().toString(36).slice(2);
-                        const memoryCallbackId = 'SF_MEMORY_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+                        const finish = (payload) => resolve(payload);
 
-                        window[callbackId] = (result) => {
-                            delete window[callbackId];
-                            resolve(result);
-                        };
-
-                        window[memoryCallbackId] = (memory) => {
-                            delete window[memoryCallbackId];
-
-                            const kb = (memory.bytes / 1024).toFixed(2);
-                            const mb = (memory.bytes / (1024 * 1024)).toFixed(2);
-                        };
-
-                        const wrappedCode = `
-                            (async function() {
+                        window[callbackId] = (payload) => {
+                            (async () => {
                                 try {
-                                    const result = (function() { ${userCode} })();
-                                    
-									if (memoryInspectorEnabled && window.GM_getMemory) {
-										const memory = await window.GM_getMemory();
-										window['${memoryCallbackId}'](memory);
-									}
-									
-                                    window['${callbackId}']({ 
-                                        success: true, 
-                                        result: result !== undefined ? String(result) : 'undefined',
-                                        type: typeof result
-                                    });
-                                } catch (error) {
-                                    window['${callbackId}']({ 
-                                        success: false, 
-                                        error: error.message,
-                                        stack: error.stack
-                                    });
+                                    if (memoryInspectorEnabled && window.GM_getMemory) {
+                                        const memory = await window.GM_getMemory();
+                                        const kb = (memory.bytes / 1024).toFixed(2);
+                                        const mb = (memory.bytes / (1024 * 1024)).toFixed(2);
+                                        console.log(
+                                            `%c[ScriptFlow Memory] Userscript Memory Usage: ${kb} KB / ${mb} MB`,
+                                            'background: #34d399; color: black; padding: 2px 4px; border-radius: 2px; font-weight: bold;'
+                                        );
+                                    }
+                                } catch (_) {
+                                    // ignore
+                                } finally {
+                                    try {
+                                        delete window[callbackId];
+                                    } catch (_) {}
+                                    finish(payload);
                                 }
                             })();
-                        `;
+                        };
 
                         let policy;
                         try {
@@ -762,47 +762,39 @@ class ScriptFlowPopup {
                                 });
                             }
                         } catch (e) {
-                            if (window.trustedTypes) {
-                                policy = window.trustedTypes.defaultPolicy;
-                            }
+                            if (window.trustedTypes) policy = window.trustedTypes.defaultPolicy;
                         }
 
-                        const script = document.createElement('script');
-                        if (policy) {
-                            script.textContent = policy.createScript(wrappedCode);
-                        } else {
-                            script.textContent = wrappedCode;
-                        }
-                        (document.head || document.documentElement).appendChild(script);
-                        script.remove();
+                        const s = document.createElement('script');
+                        s.textContent = policy ? policy.createScript(builtCode) : builtCode;
+                        (document.head || document.documentElement).appendChild(s);
+                        s.remove();
 
                         setTimeout(() => {
                             if (window[callbackId]) {
-                                window[callbackId]({
+                                try {
+                                    delete window[callbackId];
+                                } catch (_) {}
+                                finish({
                                     success: true,
                                     result: 'Code executed (no return captured or timed out)'
                                 });
                             }
-                        }, 1000);
+                        }, 2000);
                     });
                 },
-                args: [code, memoryInspectorEnabled],
-                world: 'MAIN'
+                args: [built.code, callbackId, memoryInspectorEnabled],
             });
 
-            if (results && results[0] && results[0].result) {
-                const result = results[0].result;
-                if (result.success) {
-                    if (result.result === 'undefined') {
-                        output.textContent = `Executed successfully - Check browser console for output`;
-                    } else {
-                        output.textContent = `Success\n\nResult: ${result.result}`;
-                    }
+            const payload = results?.[0]?.result;
+            if (payload?.success) {
+                if (payload.result === 'undefined') {
+                    output.textContent = 'Executed successfully - Use return (...) to display a value';
                 } else {
-                    output.textContent = `Error\n\n${result.error}`;
+                    output.textContent = `Success\n\nResult: ${payload.result}`;
                 }
             } else {
-                output.textContent = 'Executed - Check browser console';
+                output.textContent = `Error\n\n${payload?.error || 'Unknown error'}`;
             }
         } catch (error) {
             console.error('Console execution error:', error);
