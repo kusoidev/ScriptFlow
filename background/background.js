@@ -83,6 +83,7 @@ class ScriptManager {
             await this.syncAllScripts();
         });
     }
+
     async getExecutionSettings() {
         try {
             const settings = await chrome.storage.sync.get([
@@ -285,6 +286,50 @@ class ScriptManager {
         }
     }
 
+    parseScriptFlowMetadata(code) {
+        const metadata = { grant: ['none'], match: [] };
+        const blockMatch = code.match(/\/\*\s*@ScriptFlow\s*\{([\s\S]*?)\}\s*\*\//);
+        if (!blockMatch) return metadata;
+        
+        try {
+            const jsonStr = blockMatch[1].trim();
+            const cleanJson = jsonStr.replace(/,\s*([}\]])/g, '$1');
+            const parsed = JSON.parse(cleanJson);
+            this.grants = Array.isArray(parsed.grant) ? parsed.grant : ['none'];
+            this.matches = Array.isArray(parsed.match) ? parsed.match : [];
+            return { grant: this.grants, match: this.matches };
+        } catch (e) {
+            return metadata;
+        }
+    }
+
+    parseMeta() {
+        if (!this.editor) return;
+        const code = this.editor.getValue();
+        const metadata = this.parseScriptFlowMetadata(code);
+    }
+
+    renderGrants() {
+        const container = document.getElementById('grantsContainer');
+        if (!container) return;
+        
+        container.innerHTML = this.grants.map((grant, index) => 
+            `<div class="grant-item">
+                <span>${this.escape(grant)}</span>
+                <button class="grant-remove" data-index="${index}" title="Remove">×</button>
+            </div>`
+        ).join('');
+        
+        container.querySelectorAll('.grant-remove').forEach(btn => {
+            btn.addEventListener('click', e => {
+                const index = parseInt(e.target.dataset.index);
+                this.grants.splice(index, 1);
+                this.renderGrants();
+                this.updateScriptFlowBlock();
+            });
+        });
+    }
+
     parseMetadata(code) {
         const metadata = {
             match: [],
@@ -441,6 +486,201 @@ class ScriptManager {
         return normalized[runAt] || 'document_idle';
     }
 
+    // might aswell make it global/universal since buildGrantedApiScript is broken and doesnt do it properly
+    injectUniversalGMApis() {
+        return `
+    (function() {
+        if (window.SF_GM_INJECTED) return;
+        window.SF_GM_INJECTED = true;
+
+        const GM_STORAGE_PREFIX = 'SF_GM_';
+
+        function GM_setValue(key, value) {
+            try { localStorage.setItem(GM_STORAGE_PREFIX + key, JSON.stringify(value)); } catch (e) {}
+        }
+
+        function GM_getValue(key, def) {
+            try {
+                const v = localStorage.getItem(GM_STORAGE_PREFIX + key);
+                return v === null ? def : JSON.parse(v);
+            } catch (e) { return def; }
+        }
+
+        function GM_deleteValue(key) {
+            localStorage.removeItem(GM_STORAGE_PREFIX + key);
+        }
+
+        function GM_listValues() {
+            return Object.keys(localStorage)
+                .filter(k => k.startsWith(GM_STORAGE_PREFIX))
+                .map(k => k.slice(GM_STORAGE_PREFIX.length));
+        }
+
+        function GM_addStyle(css) {
+            const style = document.createElement('style');
+            style.textContent = css;
+            (document.head || document.documentElement).appendChild(style);
+            return style;
+        }
+
+        function GM_addElement(tagNameOrEl, attributes, parent) {
+            const el = typeof tagNameOrEl === 'string'
+                ? document.createElement(tagNameOrEl || 'div')
+                : tagNameOrEl;
+            if (attributes && typeof attributes === 'object') {
+                Object.entries(attributes).forEach(([k, v]) => el.setAttribute(k, v));
+            }
+            (parent || document.body || document.documentElement).appendChild(el);
+            return el;
+        }
+
+        function GM_getResourceText(name) {
+            return null;
+        }
+
+        function GM_getResourceURL(name) {
+            return null;
+        }
+
+        const _gmMenuCommands = [];
+        function GM_registerMenuCommand(label, callback, accessKey) {
+            const id = _gmMenuCommands.length + 1;
+            _gmMenuCommands.push({ id, label, callback, accessKey });
+            return id;
+        }
+
+        function GM_unregisterMenuCommand(id) {
+            const idx = _gmMenuCommands.findIndex(c => c.id === id);
+            if (idx >= 0) _gmMenuCommands.splice(idx, 1);
+        }
+
+        function GM_xmlhttpRequest(details) {
+            const xhr = new XMLHttpRequest();
+            xhr.open((details.method || 'GET').toUpperCase(), details.url, !details.synchronous);
+            if (details.headers) {
+                Object.entries(details.headers).forEach(([k, v]) => xhr.setRequestHeader(k, v));
+            }
+            xhr.onload = function() {
+                details.onload && details.onload({
+                    readyState: xhr.readyState,
+                    responseHeaders: xhr.getAllResponseHeaders(),
+                    responseText: xhr.responseText,
+                    status: xhr.status,
+                    statusText: xhr.statusText,
+                    finalUrl: xhr.responseURL
+                });
+            };
+            xhr.onerror = function(e) {
+                details.onerror && details.onerror(e);
+            };
+            if (details.onprogress) xhr.onprogress = details.onprogress;
+            if (details.ontimeout) xhr.ontimeout = details.ontimeout;
+            if (details.timeout) xhr.timeout = details.timeout;
+            xhr.send(details.data);
+            return { abort: () => xhr.abort() };
+        }
+
+        function GM_download(arg1, arg2) {
+            const opts = typeof arg1 === 'string' ? { url: arg1, name: arg2 } : arg1;
+            if (!opts || !opts.url) return;
+            const a = document.createElement('a');
+            a.href = opts.url;
+            a.download = opts.name || 'download';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            if (opts.onload) opts.onload();
+        }
+
+        function GM_openInTab(url, options) {
+            return window.open(url, (options && options.active === false) ? '_blank' : '_blank');
+        }
+
+        function GM_setClipboard(data) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(data).catch(() => {});
+            }
+        }
+
+        function GM_log() {
+            console.log.apply(console, arguments);
+        }
+
+        function GM_notification(textOrOptions, title, image, onclick) {
+            let text = textOrOptions;
+            let opts = {};
+            if (typeof textOrOptions === 'object') {
+                opts = textOrOptions;
+                text = textOrOptions.text || textOrOptions.body || '';
+                title = textOrOptions.title || title;
+                image = textOrOptions.image || textOrOptions.icon || image;
+                onclick = textOrOptions.onclick || onclick;
+            }
+            const show = () => {
+                const n = new Notification(title || 'ScriptFlow', { body: text, icon: image });
+                if (onclick) n.onclick = onclick;
+            };
+            if (Notification.permission === 'granted') {
+                show();
+            } else if (Notification.permission !== 'denied') {
+                Notification.requestPermission().then(p => { if (p === 'granted') show(); });
+            }
+        }
+
+        const GM_info = {
+            scriptHandler: 'ScriptFlow',
+            version: '2.0',
+            script: {
+                name: document.title || 'ScriptFlow Script',
+                description: '',
+                version: '1.0',
+                namespace: 'ScriptFlow'
+            }
+        };
+
+        window.GM_setValue = GM_setValue;
+        window.GM_getValue = GM_getValue;
+        window.GM_deleteValue = GM_deleteValue;
+        window.GM_listValues = GM_listValues;
+        window.GM_addStyle = GM_addStyle;
+        window.GM_addElement = GM_addElement;
+        window.GM_getResourceText = GM_getResourceText;
+        window.GM_getResourceURL = GM_getResourceURL;
+        window.GM_registerMenuCommand = GM_registerMenuCommand;
+        window.GM_unregisterMenuCommand = GM_unregisterMenuCommand;
+        window.GM_xmlhttpRequest = GM_xmlhttpRequest;
+        window.GM_download = GM_download;
+        window.GM_openInTab = GM_openInTab;
+        window.GM_setClipboard = GM_setClipboard;
+        window.GM_log = GM_log;
+        window.GM_notification = GM_notification;
+        window.GM_info = GM_info;
+
+        window.GM = {
+            setValue: GM_setValue,
+            getValue: GM_getValue,
+            deleteValue: GM_deleteValue,
+            listValues: GM_listValues,
+            addStyle: GM_addStyle,
+            addElement: GM_addElement,
+            getResourceText: GM_getResourceText,
+            getResourceURL: GM_getResourceURL,
+            registerMenuCommand: GM_registerMenuCommand,
+            unregisterMenuCommand: GM_unregisterMenuCommand,
+            xmlHttpRequest: GM_xmlhttpRequest,
+            download: GM_download,
+            openInTab: GM_openInTab,
+            setClipboard: GM_setClipboard,
+            log: GM_log,
+            notification: GM_notification,
+            info: GM_info
+        };
+
+        console.log('ScriptFlow: ALL main GM APIs injected. (i think)');
+    })();
+        `;
+    }
+
     async buildFinalCode(script) {
         const {
             memoryInspectorEnabled = false, memoryInspectorPosition = 'top-right', debugLogging = false
@@ -472,6 +712,7 @@ class ScriptManager {
             }
         }
 
+        const gmApis = this.injectUniversalGMApis();
         let externalScriptsCode = '';
         if (metadata.require && metadata.require.length > 0) {
             const scriptPromises = metadata.require.map(async (url) => {
@@ -973,7 +1214,8 @@ class ScriptManager {
             } else {
                 userCode = code;
             }
-            return externalScriptsCode ? externalScriptsCode + userCode : userCode;
+            const gmApis = this.injectUniversalGMApis();
+            return gmApis + externalScriptsCode + userCode;
         }
 
         const apiCode = this.buildGrantedApiScript(metadata.grant, resources, memoryInspectorEnabled, memoryInspectorPosition, debugLogging);
@@ -1132,36 +1374,34 @@ class ScriptManager {
 				}
 			}
 		`;
-        return ` ${externalScriptsCode ? `// Required external scripts (global scope)\n${externalScriptsCode}\n\n` : ''}
-			
-        (async function() {
-          if (window['__SF_SCRIPT_${script.id}_RUNNING']) {
-              return;
-          }
-          window['__SF_SCRIPT_${script.id}_RUNNING'] = true;
-          'use strict';
-          
-          ${apiCode} 
+      return `
+          ${apiCode}
           ${memoryInspectionLogic}
 
-          try { 
-            ${userCode} 
-          } catch (e) { 
-            const isDev = ${debugLogging};
-            
-            if (isDev) {
-              console.group('%cScriptFlow User Script Error', 'background: #ef4444; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 13px;');
-              console.error('Script Name: ${script.name || 'Unknown'}');
-              console.error('Error Type:', e.name || 'Error');
-              console.error('Message:', e.message || String(e));
-              console.error('Stack:', e.stack || 'No stack trace');
-              console.groupEnd();
-            } else {
-              console.error('%c[ScriptFlow] User script error:', 'color: #ef4444; font-weight: bold;', e.message || String(e));
+          (async function() {
+            if (window['__SF_SCRIPT_${script.id}_RUNNING']) {
+                return;
             }
-          }
-        })();
-		`;
+            window['__SF_SCRIPT_${script.id}_RUNNING'] = true;
+            'use strict';
+
+            try { 
+              ${userCode} 
+            } catch (e) { 
+              const isDev = ${debugLogging};
+              if (isDev) {
+                console.group('%cScriptFlow User Script Error', 'background: #ef4444; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 13px;');
+                console.error('Script Name: ${script.name || 'Unknown'}');
+                console.error('Error Type:', e.name || 'Error');
+                console.error('Message:', e.message || String(e));
+                console.error('Stack:', e.stack || 'No stack trace');
+                console.groupEnd();
+              } else {
+                console.error('%c[ScriptFlow] User script error:', 'color: #ef4444; font-weight: bold;', e.message || String(e));
+              }
+            }
+          })();
+      `;
     }
 
     buildLazyModuleSystem(projectId) {
@@ -1593,25 +1833,100 @@ class ScriptManager {
             GM_addStyle: `(c) => { const s = document.createElement('style'); s.innerHTML = GM_API.policy.createHTML(c); document.head.appendChild(s); return s; }`,
             GM_setValue: `(k, v) => localStorage.setItem('GM_' + k, JSON.stringify(v))`,
             GM_getValue: `(k, d) => { 
-				try {
-					const v = localStorage.getItem('GM_' + k); 
-					if (v === null || v === '' || v === 'undefined') {
-						return d; 
-					}
-					return JSON.parse(v); 
-				} catch(e) { 
-					console.error('ScriptFlow: Failed to parse GM_getValue for key', k, 'with value:', v, e); 
-					return d; 
-				}
-			}`,
+              try {
+                const v = localStorage.getItem('GM_' + k); 
+                if (v === null || v === '' || v === 'undefined') {
+                  return d; 
+                }
+                return JSON.parse(v); 
+              } catch(e) { 
+                console.error('ScriptFlow: Failed to parse GM_getValue for key', k, 'with value:', v, e); 
+                return d; 
+              }
+            }`,
             GM_deleteValue: `(k) => localStorage.removeItem('GM_' + k)`,
             GM_listValues: `() => Object.keys(localStorage).filter(k => k.startsWith('GM_')).map(k => k.slice(3))`,
-            GM_xmlhttpRequest: `(d) => { const x = new XMLHttpRequest(); x.onreadystatechange = () => { if (x.readyState === 4) { const r = { status: x.status, statusText: x.statusText, responseText: x.responseText, responseHeaders: x.getAllResponseHeaders() }; (x.status >= 200 && x.status < 300 ? d.onload : d.onerror)?.(r); } }; x.open(d.method || 'GET', d.url, true); if (d.headers) for (let h in d.headers) x.setRequestHeader(h, d.headers[h]); x.send(d.data || null); return { abort: () => x.abort() }; }`,
             GM_getResourceText: `(n) => GM_API.resources[n] || null`,
             GM_openInTab: `(u) => window.open(u, '_blank')`,
             GM_setClipboard: `(t) => navigator.clipboard.writeText(t)`,
             GM_info: `{ scriptHandler: 'ScriptFlow', version: '1.0' }`,
             GM_setHTML: `(el, html) => { if (!el) return; el.innerHTML = GM_API.policy.createHTML(html); }`,
+            GM_registerMenuCommand: `(label, callback, accessKey) => {
+              try {
+                if (!window.__SF_menuCommands) window.__SF_menuCommands = [];
+                const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+                window.__SF_menuCommands.push({ id, label: String(label), callback });
+                if (window.__SF_refreshMenu) window.__SF_refreshMenu();
+                return id;
+              } catch (e) {
+                console.warn('[ScriptFlow] GM_registerMenuCommand error', e);
+                return null;
+              }
+            }`,
+            GM_download: `(arg1, arg2) => {
+              const opts = typeof arg1 === 'string' ? { url: arg1, name: arg2 || 'download' } : (arg1 || {});
+              const url = opts.url;
+              const name = opts.name || 'download';
+              if (!url) return;
+              const doDownload = (blob) => {
+                const a = document.createElement('a');
+                const objectUrl = URL.createObjectURL(blob);
+                a.href = objectUrl;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+              };
+              if (opts.data) {
+                doDownload(new Blob([opts.data]));
+                return;
+              }
+              fetch(url, { headers: opts.headers || {} })
+                .then(r => r.blob())
+                .then(doDownload)
+                .catch(e => console.warn('[ScriptFlow] GM_download error', e));
+            }`,
+            GM_xmlhttpRequest: `(details) => {
+              return new Promise((resolve, reject) => {
+                try {
+                  const d = details || {};
+                  const method = (d.method || 'GET').toUpperCase();
+                  const url = d.url;
+                  if (!url) throw new Error('GM_xmlhttpRequest: url is required');
+
+                  const headers = d.headers || {};
+                  const body = d.data !== undefined ? d.data : d.body;
+
+                  fetch(url, { method, headers, body, credentials: d.anonymous ? 'omit' : 'include' })
+                    .then(async (res) => {
+                      const text = await res.text();
+                      const response = {
+                        responseText: text,
+                        readyState: 4,
+                        status: res.status,
+                        statusText: res.statusText,
+                        finalUrl: res.url,
+                        headers: Object.fromEntries(res.headers.entries())
+                      };
+                      if (res.ok) {
+                        d.onload && d.onload(response);
+                        resolve(response);
+                      } else {
+                        d.onerror && d.onerror(response);
+                        reject(response);
+                      }
+                    })
+                    .catch((e) => {
+                      const err = { error: e };
+                      d.onerror && d.onerror(err);
+                      reject(err);
+                    });
+                } catch (e) {
+                  reject(e);
+                }
+              });
+            }`,
             // src: https://developer.mozilla.org/en-US/docs/Web/API/Performance/measureUserAgentSpecificMemory
             // should work now
             GM_getMemory: `(options = {}) => new Promise(async (resolve, reject) => {
@@ -1799,13 +2114,7 @@ class ScriptManager {
 			})`
         };
 
-        let apiParts = [
-            `unsafeWindow: window`,
-            `GM_log: console.log.bind(console, '%c[SF]', 'background:#6d63ff;color:white;padding:2px 4px;border-radius:2px;')`,
-            `memoryInspectorEnabled: ${memoryInspectorEnabled}`,
-            `memoryInspectorPosition: '${memoryInspectorPosition}'`,
-            `debugLogging: ${debugLogging}`
-        ];
+        let apiParts = [];
 
         const policyCreation = `
 			let policy = { createHTML: (s) => s, createScript: (s) => s };
@@ -1960,7 +2269,9 @@ class ScriptManager {
                 effectiveGrants.push('GM_setHTML');
             }
             effectiveGrants.forEach(g => {
-                if (masterApi[g]) apiParts.push(`${g}: ${masterApi[g]}`);
+                if (masterApi[g]) {
+                    apiParts.push(`${g}: ${masterApi[g]}`);
+                }
             });
         } else {
             if (memoryInspectorEnabled && masterApi['GM_getMemory']) {
@@ -1970,15 +2281,24 @@ class ScriptManager {
 
         const resourceEntries = Object.entries(resources).map(([k, v]) => `'${k}': \`${String(v).replace(/`/g, '\\`')}\``).join(', ');
 
-        return `
-			${policyCreation}
-			const GM_API = { ${apiParts.join(',\n')}, resources: { ${resourceEntries} }, policy };
-			window.GM = GM_API; 
-			Object.assign(window, GM_API);
-			${polyfillInnerHtml}
-			${fetchBridge}
-			${passiveEventFix}
-		`;
+      return `
+          ${policyCreation}
+          const GM_API = { 
+              unsafeWindow: window,
+              GM_log: console.log.bind(console, '%c[SF]', 'background:#6d63ff;color:white;padding:2px 4px;border-radius:2px;'),
+              memoryInspectorEnabled: ${memoryInspectorEnabled},
+              memoryInspectorPosition: '${memoryInspectorPosition}',
+              debugLogging: ${debugLogging}${apiParts.length > 0 ? ',' : ''}
+              ${apiParts.join(',\n        ')}${apiParts.length > 0 ? ',' : ''}
+              policy: policy,
+              resources: { ${resourceEntries} }
+          };
+          window.GM = GM_API; 
+          Object.assign(window, GM_API);
+          ${polyfillInnerHtml}
+          ${fetchBridge}
+          ${passiveEventFix}
+      `;
     }
 
     buildAsyncModuleSystem(script) {

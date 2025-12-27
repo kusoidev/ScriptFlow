@@ -136,8 +136,7 @@ class ScriptFlowEditor {
   "description": "Template for DOM manipulation tasks",
   "match": [
     "https://example.com/*"
-  ],
-  "grant": ["GM_addStyle"]
+  ]
 }
 */
 
@@ -183,8 +182,7 @@ class ScriptFlowEditor {
   "description": "Template for injecting custom CSS",
   "match": [
     "https://example.com/*"
-  ],
-  "grant": ["GM_addStyle"]
+  ]
 }
 */
 
@@ -204,8 +202,7 @@ class ScriptFlowEditor {
   "description": "Template with useful utility functions",
   "match": [
     "https://example.com/*"
-  ],
-  "grant": ["GM_getValue", "GM_setValue"]
+  ]
 }
 */
 
@@ -1748,6 +1745,101 @@ class ScriptFlowEditor {
         document.getElementById('settingsModal').classList.remove('visible');
     }
 
+    getProjectFileList() {
+        const files = [];
+
+        if (this.mode === 'multi-file-edit' && this.script?.files) {
+            for (const path of Object.keys(this.script.files)) {
+                if (path.toLowerCase().endsWith('.js')) {
+                    files.push(path);
+                }
+            }
+        } else if (this.mode === 'workspace' && this.workspaceHandle) {
+            const tree = document.getElementById('fileTree');
+            if (!tree) return files;
+            tree.querySelectorAll('.tree-item[data-kind="file"]').forEach(item => {
+                const p = item.dataset.path;
+                if (p && p.toLowerCase().endsWith('.js')) files.push(p);
+            });
+        }
+
+        return files;
+    }
+
+    getRelativeImportPath(targetPath) {
+        if (!this.currentPath) return './' + targetPath;
+
+        const fromParts = this.currentPath.split('/').slice(0, -1); // dir of current file
+        const toParts = targetPath.split('/');
+
+        let i = 0;
+        while (i < fromParts.length && i < toParts.length && fromParts[i] === toParts[i]) {
+            i++;
+        }
+
+        const up = fromParts.length - i;
+        const down = toParts.slice(i).join('/');
+
+        const prefix = up > 0 ? '../'.repeat(up) : './';
+        return prefix + down;
+    }
+
+    resolveImportToProjectFile(fromPath, importPath) {
+        if (!importPath.startsWith('.') && !importPath.startsWith('/')) return null;
+
+        const baseParts = fromPath.split('/').slice(0, -1);
+        const segs = importPath.split('/');
+
+        const parts = [];
+        for (const seg of segs) {
+            if (seg === '.' || seg === '') continue;
+            if (seg === '..') baseParts.pop();
+            else parts.push(seg);
+        }
+
+        const combined = baseParts.concat(parts).join('/');
+
+        // try direct, with .js, .mjs, .jsx
+        const candidates = [combined, combined + '.js', combined + '.mjs', combined + '.jsx'];
+        const files = this.getProjectFileList();
+        return candidates.find(c => files.includes(c)) || null;
+    }
+
+    async getFileExportsSummary(path) {
+        let code = null;
+
+        if (this.mode === 'multi-file-edit' && this.script?.files?.[path]) {
+            code = this.script.files[path];
+        } else if (this.mode === 'workspace' && this.workspaceHandle) {
+            code = await this.getFile(path);
+        }
+
+        if (!code || typeof code !== 'string') return null;
+
+        const lines = code.split('\n');
+
+        const exports = new Set();
+
+        for (const line of lines) {
+            let m;
+            if (m = line.match(/export\s+default\s+function\s+([A-Za-z0-9_$]+)/)) {
+                exports.add(`default: function ${m[1]}(...)`);
+            } else if (m = line.match(/export\s+function\s+([A-Za-z0-9_$]+)/)) {
+                exports.add(`function ${m[1]}(...)`);
+            } else if (m = line.match(/export\s+const\s+([A-Za-z0-9_$]+)/)) {
+                exports.add(`const ${m[1]}`);
+            } else if (m = line.match(/export\s+class\s+([A-Za-z0-9_$]+)/)) {
+                exports.add(`class ${m[1]}`);
+            } else if (m = line.match(/export\s+default\s+([A-Za-z0-9_$]+)/)) {
+                exports.add(`default: ${m[1]}`);
+            }
+        }
+
+        if (exports.size === 0) return '_No exports detected in this file._';
+
+        return Array.from(exports).slice(0, 20).map(e => `- ${e}`).join('\n');
+    }
+
     setupSnippets() {
         if (!monaco?.languages?.registerCompletionItemProvider) return;
 
@@ -1756,21 +1848,50 @@ class ScriptFlowEditor {
                 kind: monaco.languages.CompletionItemKind.Snippet,
                 insertText: 'GM_getValue("${1:key}", ${2:defaultValue})',
                 insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                documentation: 'Get a stored value'
+                documentation: 'Get a stored value by key (or default value if missing).'
             },
             {
                 label: 'gm_setValue',
                 kind: monaco.languages.CompletionItemKind.Snippet,
                 insertText: 'GM_setValue("${1:key}", ${2:value})',
                 insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                documentation: 'Store a value'
+                documentation: 'Store a value under the given key.'
             },
             {
                 label: 'gm_addStyle',
                 kind: monaco.languages.CompletionItemKind.Snippet,
                 insertText: 'GM_addStyle(`\n\t${1:/* CSS rules */}\n`)',
                 insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                documentation: 'Inject custom CSS'
+                documentation: 'Inject custom CSS into the current page.'
+            },
+            {
+                label: 'gm_registerMenuCommand',
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText: [
+                    '// Add a clickable item to the ScriptFlow userscript menu',
+                    'GM_registerMenuCommand("${1:Open panel}", () => {',
+                    '\t// This code runs when the menu item is clicked',
+                    '\talert("Menu command clicked!");',
+                    '});'
+                ].join('\n'),
+                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                documentation: 'Register a menu command that appears in ScriptFlow’s menu/overlay.'
+            },
+            {
+                label: 'gm_download',
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText: [
+                    '// Download a file from a URL',
+                    'GM_download({',
+                    '\turl: "${1:https://example.com/file.txt}",',
+                    '\tname: "${2:file.txt}",',
+                    '\theaders: {',
+                    '\t\t// "Authorization": "Bearer token"',
+                    '\t},',
+                    '});'
+                ].join('\n'),
+                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                documentation: 'Download a URL to the user’s machine with an optional filename.'
             },
             {
                 label: 'sf_module',
@@ -1785,7 +1906,7 @@ class ScriptFlowEditor {
                     'export default ${2:functionName};'
                 ].join('\n'),
                 insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                documentation: 'ES Module template'
+                documentation: 'ES module template with a named and default export.'
             },
             {
                 label: 'sf_component',
@@ -1810,30 +1931,32 @@ class ScriptFlowEditor {
                     'export default ${1:ComponentName};'
                 ].join('\n'),
                 insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                documentation: 'Component class template'
+                documentation: 'Simple UI component class with render + mount helpers.'
             },
             {
                 label: 'gm_xmlhttp',
                 kind: monaco.languages.CompletionItemKind.Snippet,
                 insertText: [
+                    '// Example GM_xmlhttpRequest usage',
                     'GM_xmlhttpRequest({',
                     '\tmethod: "${1|GET,POST,PUT,DELETE|}",',
-                    '\turl: "${2:https://api.example.com}",',
+                    '\turl: "${2:https://api.example.com/resource}",',
                     '\theaders: {',
                     '\t\t"Content-Type": "application/json"',
                     '\t},',
-                    '\tdata: JSON.stringify(${3:{}}),',
+                    '\tdata: JSON.stringify(${3:{}}), // remove for GET',
                     '\tonload: (response) => {',
-                    '\t\tconsole.log(response.responseText);',
-                    '\t\t${4:// Handle response}',
+                    '\t\tconsole.log("Status:", response.status);',
+                    '\t\tconsole.log("Body:", response.responseText);',
+                    '\t\t${4:// Handle success here}',
                     '\t},',
                     '\tonerror: (error) => {',
-                    '\t\tconsole.error(error);',
+                    '\t\tconsole.error("Request failed:", error);',
                     '\t}',
                     '});'
                 ].join('\n'),
                 insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                documentation: 'GM AJAX request'
+                documentation: 'GM-style HTTP request with onload/onerror callbacks.'
             },
             {
                 label: 'sf_waitElement',
@@ -1865,11 +1988,11 @@ class ScriptFlowEditor {
                     '}',
                     '',
                     'waitForElement("${1:selector}").then(el => {',
-                    '\t${2:// Use element}',
+                    '\t${2:// Use element here}',
                     '});'
                 ].join('\n'),
                 insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-                documentation: 'Wait for element to appear in DOM'
+                documentation: 'Promise helper that resolves when a DOM element appears.'
             }
         ];
 
@@ -1877,6 +2000,82 @@ class ScriptFlowEditor {
             provideCompletionItems: (model, position) => {
                 return {
                     suggestions: snippets
+                };
+            }
+        });
+
+        monaco.languages.registerCompletionItemProvider('javascript', {
+            triggerCharacters: ['"', "'", '/', '.', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'],
+            provideCompletionItems: (model, position) => {
+                const textUntilPos = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+
+                const importMatch = textUntilPos.match(/import\s+[^'"]*from\s+['"]([^'"]*)$/) || textUntilPos.match(/import\s+['"]([^'"]*)$/) || textUntilPos.match(/require\(\s*['"]([^'"]*)$/);
+
+                if (!importMatch) return {
+                    suggestions: []
+                };
+
+                const typed = importMatch[1] || '';
+                const files = this.getProjectFileList();
+                const suggestions = files.map(path => {
+                    const rel = this.getRelativeImportPath(path);
+                    return {
+                        label: rel,
+                        kind: monaco.languages.CompletionItemKind.Module,
+                        insertText: rel,
+                        range: {
+                            startLineNumber: position.lineNumber,
+                            endLineNumber: position.lineNumber,
+                            startColumn: position.column - typed.length,
+                            endColumn: position.column
+                        },
+                        detail: 'Project file',
+                    };
+                });
+
+                return {
+                    suggestions
+                };
+            }
+        });
+
+        monaco.languages.registerHoverProvider('javascript', {
+            provideHover: async (model, position) => {
+                const wordInfo = model.getWordAtPosition(position);
+                if (!wordInfo) return null;
+
+                const line = model.getLineContent(position.lineNumber);
+                const textBefore = line.slice(0, wordInfo.startColumn - 1);
+
+                if (!/import\s.+from\s+['"]/.test(line) && !/import\s+['"]/.test(line)) {
+                    return null;
+                }
+
+                const importMatch = line.match(/from\s+['"]([^'"]+)['"]/) || line.match(/import\s+['"]([^'"]+)['"]/);
+                if (!importMatch) return null;
+                const importPath = importMatch[1];
+
+                const currentPath = this.currentPath || 'index.js';
+                const targetFile = this.resolveImportToProjectFile(currentPath, importPath);
+                if (!targetFile) return null;
+
+                const exportsInfo = await this.getFileExportsSummary(targetFile);
+                if (!exportsInfo) return null;
+
+                return {
+                    range: new monaco.Range(
+                        position.lineNumber,
+                        wordInfo.startColumn,
+                        position.lineNumber,
+                        wordInfo.endColumn
+                    ),
+                    contents: [{
+                            value: `**${targetFile}**`
+                        },
+                        {
+                            value: exportsInfo
+                        }
+                    ]
                 };
             }
         });
@@ -3842,7 +4041,7 @@ class ScriptFlowEditor {
         const lines = headerBlock.split('\n').filter(line => line.trim() !== '');
 
         const meta = {};
-        const multiKeys = ['match', 'grant', 'require', 'resource', 'connect'];
+        const multiKeys = ['match', 'require', 'resource', 'connect'];
 
         for (const line of lines) {
             const lineMatch = line.match(/\/\/\s*@(\S+)\s+(.*)/);
@@ -3893,6 +4092,8 @@ class ScriptFlowEditor {
                 meta.match = ['all'];
             }
         }
+
+        delete meta.grant;
 
         const newHeader = `/*
 @ScriptFlow
@@ -4206,8 +4407,7 @@ ${JSON.stringify(meta, null, 2)}
             const meta = JSON.parse(match[1]);
             document.getElementById('scriptName').value = meta.name || '';
             document.getElementById('scriptDescription').value = meta.description || '';
-            this.matches = Array.isArray(meta.match) ? meta.match :
-                (typeof meta.match === 'string' ? [meta.match] : []);
+            this.matches = Array.isArray(meta.match) ? meta.match : (typeof meta.match === 'string' ? [meta.match] : []);
             this.grants = meta.grant || [];
             this.renderMatches();
         } catch (e) {
