@@ -1803,7 +1803,147 @@ class ScriptFlowEditor {
         return candidates.find(c => files.includes(c)) || null;
     }
 
-    async getFileExportsSummary(path) {
+    /*SetupSmartImports() {
+        const editor = this;
+
+        monaco.languages.registerCompletionItemProvider('javascript', {
+            triggerCharacters: [' '],
+            provideCompletionItems: async (model, position) => {
+                const lineText = model.getLineContent(position.lineNumber);
+                const textUntilPos = lineText.slice(0, position.column - 1);
+
+                const fnMatch = textUntilPos.match(/import\s+([\w$]+)\s+from\s*$/);
+                if (!fnMatch) {
+                    return {
+                        suggestions: []
+                    };
+                }
+
+                const symbolName = fnMatch[1];
+
+                const match = await editor.FindSingleFileExporting(symbolName);
+                if (!match) {
+                    return {
+                        suggestions: []
+                    };
+                }
+
+                const rel = editor.getRelativeImportPath(match);
+
+                return {
+                    suggestions: [{
+                        label: rel,
+                        kind: monaco.languages.CompletionItemKind.Module,
+                        insertText: `"${rel}"`,
+                        range: {
+                            startLineNumber: position.lineNumber,
+                            endLineNumber: position.lineNumber,
+                            startColumn: position.column,
+                            endColumn: position.column
+                        },
+                        detail: `${symbolName} → ${match}`
+                    }]
+                };
+            }
+        });
+    }*/
+
+    SetupSmartImports() {
+        const editor = this;
+        monaco.languages.registerInlineCompletionsProvider('javascript', {
+            async provideInlineCompletions(model, position, context, token) {
+                const lineText = model.getLineContent(position.lineNumber);
+                const textUntilPos = lineText.slice(0, position.column - 1);
+
+                const fnMatch = textUntilPos.match(/import\s+([\w$]+)\s+from\s*$/);
+                if (!fnMatch) return {
+                    items: []
+                };
+
+                const symbolName = fnMatch[1];
+                const matches = await editor.FindFilesExporting(symbolName);
+                if (!matches || matches.length === 0) return {
+                    items: []
+                };
+
+                const chosenPath = matches[0];
+                const rel = editor.getRelativeImportPath(chosenPath);
+
+                return {
+                    items: [{
+                        insertText: `"${rel}"`,
+                        range: new monaco.Range(
+                            position.lineNumber,
+                            position.column,
+                            position.lineNumber,
+                            position.column
+                        )
+                    }]
+                };
+            },
+            freeInlineCompletions() {}
+        });
+        monaco.languages.registerCompletionItemProvider('javascript', {
+            triggerCharacters: [' '],
+            provideCompletionItems: async (model, position) => {
+                const lineText = model.getLineContent(position.lineNumber);
+                const textUntilPos = lineText.slice(0, position.column - 1);
+
+                const fnMatch = textUntilPos.match(/import\s+([\w$]+)\s+from\s*$/);
+                if (!fnMatch) {
+                    return {
+                        suggestions: []
+                    };
+                }
+
+                const symbolName = fnMatch[1];
+                const matches = await editor.FindFilesExporting(symbolName);
+                if (!matches || matches.length === 0) {
+                    return {
+                        suggestions: []
+                    };
+                }
+
+                const suggestions = matches.map(path => {
+                    const rel = editor.getRelativeImportPath(path);
+                    return {
+                        label: rel,
+                        kind: monaco.languages.CompletionItemKind.Module,
+                        insertText: `"${rel}"`,
+                        detail: `${symbolName} → ${path}`
+                    };
+                });
+
+                return {
+                    suggestions
+                };
+            }
+        });
+    }
+
+    async FindFilesExporting(name) {
+        const files = this.getProjectFileList();
+        const matches = [];
+
+        const needle = new RegExp(`\\b${name}\\b`);
+
+        for (const filePath of files) {
+            try {
+                const summary = await this.GetFileExportsSummary(filePath);
+                if (!summary || summary === '_No exports detected in this file._') continue;
+
+                if (needle.test(summary)) {
+                    matches.push(filePath);
+                }
+            } catch (e) {
+                console.warn('SmartImports: error in', filePath, e);
+            }
+        }
+
+        return matches;
+    }
+
+    async GetFileExportsSummary(path) {
         let code = null;
 
         if (this.mode === 'multi-file-edit' && this.script?.files?.[path]) {
@@ -1815,25 +1955,99 @@ class ScriptFlowEditor {
         if (!code || typeof code !== 'string') return null;
 
         const lines = code.split('\n');
-
         const exports = new Set();
 
-        for (const line of lines) {
+        for (const rawLine of lines) {
+            const line = rawLine.trim();
             let m;
-            if (m = line.match(/export\s+default\s+function\s+([A-Za-z0-9_$]+)/)) {
-                exports.add(`default: function ${m[1]}(...)`);
-            } else if (m = line.match(/export\s+function\s+([A-Za-z0-9_$]+)/)) {
-                exports.add(`function ${m[1]}(...)`);
-            } else if (m = line.match(/export\s+const\s+([A-Za-z0-9_$]+)/)) {
-                exports.add(`const ${m[1]}`);
-            } else if (m = line.match(/export\s+class\s+([A-Za-z0-9_$]+)/)) {
-                exports.add(`class ${m[1]}`);
-            } else if (m = line.match(/export\s+default\s+([A-Za-z0-9_$]+)/)) {
-                exports.add(`default: ${m[1]}`);
+
+            // export default class Blah { ... }
+            if ((m = line.match(/^export\s+default\s+class\s+([A-Za-z0-9_]+)/))) {
+                exports.add(`default class: ${m[1]}`);
+            }
+            // export class Blah { ... }
+            else if ((m = line.match(/^export\s+class\s+([A-Za-z0-9_]+)/))) {
+                exports.add(`class: ${m[1]}`);
+            }
+            // export default function Blah() { ... }
+            else if ((m = line.match(/^export\s+default\s+function\s+([A-Za-z0-9_]+)/))) {
+                exports.add(`default function: ${m[1]}`);
+            }
+            // export function Blah() { ... }
+            else if ((m = line.match(/^export\s+function\s+([A-Za-z0-9_]+)/))) {
+                exports.add(`function: ${m[1]}`);
+            }
+            // export const Blah = ...
+            else if ((m = line.match(/^export\s+const\s+([A-Za-z0-9_]+)/))) {
+                exports.add(`const: ${m[1]}`);
+            }
+            // export let Blah = ...
+            else if ((m = line.match(/^export\s+let\s+([A-Za-z0-9_]+)/))) {
+                exports.add(`let: ${m[1]}`);
+            }
+            // export var Blah = ...
+            else if ((m = line.match(/^export\s+var\s+([A-Za-z0-9_]+)/))) {
+                exports.add(`var: ${m[1]}`);
+            }
+            // export { a, b as c }
+            else if ((m = line.match(/^export\s*{\s*([^}]+)\s*}/))) {
+                const parts = m[1].split(',');
+                for (const part of parts) {
+                    const p = part.trim();
+                    // "name as alias" or just "name"
+                    const asMatch = p.match(/^([A-Za-z0-9_]+)\s+as\s+([A-Za-z0-9_]+)/);
+                    if (asMatch) {
+                        exports.add(`named: ${asMatch[2]} (from ${asMatch[1]})`);
+                    } else {
+                        const simple = p.match(/^([A-Za-z0-9_]+)/);
+                        if (simple) {
+                            exports.add(`named: ${simple[1]}`);
+                        }
+                    }
+                }
+            }
+            // export * from './foo'
+            else if ((m = line.match(/^export\s+\*\s+from\s+['"]([^'"]+)['"]/))) {
+                exports.add(`re-export * from: ${m[1]}`);
+            }
+            // export { a, b } from './Blah'
+            else if ((m = line.match(/^export\s*{\s*([^}]+)\s*}\s*from\s+['"]([^'"]+)['"]/))) {
+                const fromPath = m[2];
+                const parts = m[1].split(',');
+                for (const part of parts) {
+                    const p = part.trim();
+                    const asMatch = p.match(/^([A-Za-z0-9_]+)\s+as\s+([A-Za-z0-9_]+)/);
+                    if (asMatch) {
+                        exports.add(`re-export: ${asMatch[2]} (from ${fromPath})`);
+                    } else {
+                        const simple = p.match(/^([A-Za-z0-9_]+)/);
+                        if (simple) {
+                            exports.add(`re-export: ${simple[1]} (from ${fromPath})`);
+                        }
+                    }
+                }
+            }
+            // export default Blah;
+            // where blah = new BlahBlah()
+            else if ((m = line.match(/^export\s+default\s+([A-Za-z0-9_]+)/))) {
+                const exportedVar = m[1];
+                exports.add(`default: ${exportedVar}`);
+
+                const ctorRegex = new RegExp(
+                    `\\b(const|let|var)\\s+${exportedVar}\\s*=\\s*new\\s+([A-Za-z0-9_]+)`
+                );
+
+                const ctorMatch = code.match(ctorRegex);
+                if (ctorMatch) {
+                    const className = ctorMatch[2];
+                    exports.add(`default instance of: ${className}`);
+                }
             }
         }
 
-        if (exports.size === 0) return '_No exports detected in this file._';
+        if (exports.size === 0) {
+            return '_No exports detected in this file._';
+        }
 
         return Array.from(exports).slice(0, 20).map(e => `- ${e}`).join('\n');
     }
@@ -2002,7 +2216,7 @@ class ScriptFlowEditor {
             }
         });
 
-        monaco.languages.registerCompletionItemProvider('javascript', {
+        /*monaco.languages.registerCompletionItemProvider('javascript', {
             triggerCharacters: ['"', "'", '/', '.', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'],
             provideCompletionItems: (model, position) => {
                 const textUntilPos = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
@@ -2035,7 +2249,7 @@ class ScriptFlowEditor {
                     suggestions
                 };
             }
-        });
+        });*/
 
         monaco.languages.registerHoverProvider('javascript', {
             provideHover: async (model, position) => {
@@ -2057,7 +2271,7 @@ class ScriptFlowEditor {
                 const targetFile = this.resolveImportToProjectFile(currentPath, importPath);
                 if (!targetFile) return null;
 
-                const exportsInfo = await this.getFileExportsSummary(targetFile);
+                const exportsInfo = await this.GetFileExportsSummary(targetFile);
                 if (!exportsInfo) return null;
 
                 return {
@@ -2521,6 +2735,7 @@ class ScriptFlowEditor {
         this.setupSourceControl();
         this.setupEditorSettings();
         this.setupSnippets();
+        this.SetupSmartImports();
 
         this.setupDebouncedValidation();
 
@@ -3988,6 +4203,14 @@ class ScriptFlowEditor {
                         enabled: true
                     },
                     automaticLayout: true,
+                    inlineSuggest: {
+                        enabled: true,
+                        mode: 'prefix',
+                        showToolbar: 'onHover'
+                    },
+                    suggest: {
+                        preview: true
+                    }
                 });
 
                 const initialModel = monaco.editor.createModel(
