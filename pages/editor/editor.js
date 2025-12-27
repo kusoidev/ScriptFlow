@@ -780,9 +780,7 @@ class ScriptFlowEditor {
         const repoUrl = document.getElementById('repoUrl')?.value?.trim();
         const hasRepoUrl = repoUrl && repoUrl.startsWith('https');
 
-        if (this.mode !== 'git' &&
-            this.mode !== 'multi-file-edit' &&
-            !(this.mode === 'workspace' && hasRepoUrl)) {
+        if (this.mode !== 'git' && this.mode !== 'multi-file-edit' && !(this.mode === 'workspace' && hasRepoUrl)) {
             scPanel.innerHTML = `<div style="padding: 10px; color: var(--muted); font-style: italic; font-size: 14px;">
                 Source control is only available when a Git repository is cloned or a workspace/project with GitHub repo is configured.
                 <br/><br/>
@@ -2575,41 +2573,203 @@ class ScriptFlowEditor {
         this.runOnboardingTour();
     }
 
+    EnsureSourceCtrlTabVisible() {
+        const workspaceBtn = document.querySelector('#explorerToggleBtn');
+        if (workspaceBtn) {
+            workspaceBtn.click();
+        }
+
+        const tabsContainer = document.querySelector('.sidebar-tabs');
+        if (!tabsContainer) return null;
+
+        let scTab = tabsContainer.querySelector('.sidebar-tab[data-tab="source-control"]');
+        if (!scTab) {
+            scTab = document.createElement('button');
+            scTab.className = 'sidebar-tab';
+            scTab.dataset.tab = 'source-control';
+            scTab.textContent = 'Source Control';
+            tabsContainer.appendChild(scTab);
+        }
+
+        let scContent = document.querySelector('.tab-content[data-tab-content="source-control"]');
+        if (!scContent) {
+            const filesContent = document.querySelector('.tab-content[data-tab-content="files"]');
+            scContent = document.createElement('div');
+            scContent.className = 'tab-content';
+            scContent.dataset.tabContent = 'source-control';
+            scContent.style.display = 'block';
+            scContent.innerHTML = `
+                <div style="padding:16px;font-size:13px;color:var(--muted)">
+                    Source Control preview (read‑only here). Open a workspace or multi‑file project
+                    to use full Git features.
+                </div>`;
+            if (filesContent && filesContent.parentElement) {
+                filesContent.parentElement.appendChild(scContent);
+            } else {
+                document.querySelector('.sidebar')?.appendChild(scContent);
+            }
+        }
+
+        scTab.style.display = 'block';
+        scTab.addEventListener('click', () => this.switchSidebarTab('source-control'), {
+            once: true
+        });
+        scTab.click();
+
+        return scTab;
+    }
+
+    GetMetaKeyLabel() {
+        const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+        return isMac ? 'Cmd' : 'Ctrl';
+    }
+
     // shows the nice little tour for new users
-    runOnboardingTour() {
-        if (localStorage.getItem('scriptflow-tour-complete') === 'true') {
+    runOnboardingTour(force = false) {
+        if (!force && localStorage.getItem('scriptflow-tour-complete') === 'true') {
             return;
         }
 
+        const metaKey = this.GetMetaKeyLabel();
+
         const tourSteps = [{
                 element: '.header h1',
-                title: 'Welcome to ScriptFlow Editor! 🎉',
-                content: 'This is a powerful code editor for your browser. Let\'s take a quick tour of the key features.',
-                position: 'bottom'
+                title: '🎉 Welcome to ScriptFlow!',
+                content: `This is a <strong>full IDE for browser userscripts</strong> - better than Tampermonkey for complex projects. 
+                         <br><br><em>We'll cover the most important features new users miss...</em>`,
+                position: 'bottom',
+                animation: 'bounce'
             },
             {
                 element: '#loadWorkspaceBtn',
-                title: 'Load a Local Workspace',
-                content: 'Click here to open a folder from your computer. You can edit any file, just like in a desktop IDE.',
-                position: 'bottom'
-            },
-            {
-                element: '#gitSyncBtn',
-                title: 'Sync with GitHub',
-                content: 'You can also clone a GitHub repository, edit files, and push your changes right from the editor.',
-                position: 'bottom'
+                title: '📁 Load Local Projects',
+                content: `Connects to <strong>any folder on disk</strong> (like VSCode). Edit <em>real projects</em> with hundreds of files.
+                         <br><br><ul style="margin:8px 0;padding-left:20px">
+                            <li>Multi-file userscripts</li>
+                            <li>Git repos</li>
+                            <li>Static sites</li>
+                         </ul>`,
+                position: 'bottom',
+                animation: 'pulse'
             },
             {
                 element: '#explorerToggleBtn',
-                title: 'File Explorer',
-                content: 'When a workspace is loaded, you can toggle the file explorer here to see your project\'s file tree.',
-                position: 'bottom'
+                title: '📂 File Explorer',
+                content: `<strong>Toggle to see your project structure</strong>. Right-click files for:
+                         <br><ul style="margin:8px 0;padding-left:20px;font-size:13px">
+                            <li>✨ Set Entry Point (main.js)</li>
+                            <li>👁️ Preview HTML</li>
+                            <li>🗑️ Delete</li>
+                            <li>📤 Export ZIP</li>
+                         </ul>`,
+                position: 'bottom',
+                animation: 'shake',
+                onEnter: () => {
+                    this.EnsureSourceCtrlTabVisible();
+                }
             },
             {
                 element: '#editor-wrapper',
-                title: 'The Command Palette',
-                content: 'Press <strong>Ctrl+[</strong> to open the Command Palette. It gives you quick keyboard access to almost every feature!',
-                position: 'top'
+                title: '⌨️ Command Palette (Key!)',
+                content: `<strong>${metaKey}+[</strong> opens <em>everything</em>:
+                         <br><div style="font-size:12px;margin-top:8px">
+                            <strong>New Multi-File Project</strong> → File menu<br>
+                            <strong>Save as Userscript</strong> → Script menu<br>
+                            <strong>Test on page</strong> → Script menu<br>
+                            <strong>Git Push</strong> → Git menu
+                         </div>`,
+                position: 'top',
+                animation: 'pulse-fast'
+            },
+            {
+                element: '#editor-wrapper',
+                title: '⌨️ Keyboard Shortcuts',
+                content: `<div style="font-size:12px;line-height:1.5">
+                            <strong>${metaKey}+S</strong> – Save script / project / file<br>
+                            <strong>${metaKey}+F</strong> – Search in current file<br>
+                            <strong>${metaKey}+R</strong> – Replace in current file<br>
+                            <strong>${metaKey}+H</strong> – Format code<br>
+                            <strong>${metaKey}+E</strong> – Open Command Palette<br>
+                            <br>
+                            Works with both <strong>${metaKey}</strong> keys:
+                            hold either <strong>Ctrl</strong> (Windows/Linux) or <strong>Cmd</strong> (macOS).
+                         </div>`,
+                position: 'top',
+                animation: 'pulse'
+            },
+            {
+                element: '#saveBtn',
+                title: '💾 Saving Explained',
+                content: `Different save buttons for different modes:
+                         <br><div style="font-size:12px">
+                            <strong>Save Script</strong> → Single Tampermonkey-style<br>
+                            <strong>Save Project</strong> → Multi-file userscript<br>
+                            <strong>Save File</strong> → Updates workspace/Git
+                         </div>`,
+                position: 'left',
+                animation: 'pulse'
+            },
+            {
+                element: '.sidebar-tabs',
+                title: '🏗️ Workspaces vs Projects',
+                content: `Three modes (check status bar):
+                         <br><div style="font-size:12px">
+                            <strong>Extension</strong> → Single userscript<br>
+                            <strong>Multi-file</strong> → Project w/ entry point<br>
+                            <strong>Workspace</strong> → Full folder editing
+                         </div>`,
+                position: 'right',
+                animation: 'fade-in'
+            },
+            {
+                element: '#repoUrl',
+                title: '🌐 Connect Git for Projects',
+                content: `To use <strong>Source Control</strong> with a <strong>local workspace</strong>:
+                        <br><div style="font-size:12px;margin-top:6px;line-height:1.5">
+                            1. Paste your repo HTTPS URL here in <strong>Repository HTTPS URL</strong>.<br>
+                            2. You do <strong>not</strong> need to click Clone / Pull / Push yet.<br>
+                            3. Just close this dialog with the <strong>X</strong> button when you're done.
+                        </div>
+                        <br><em>Closing with a valid URL is enough to unlock the Source Control tab for this workspace.</em>`,
+                position: 'bottom',
+                animation: 'pulse',
+                onEnter: () => {
+                    const gitBtn = document.getElementById('gitSyncBtn');
+                    if (gitBtn) gitBtn.click();
+
+                    setTimeout(() => {
+                        const modal = document.getElementById('gitModal');
+                        if (modal) modal.classList.add('visible');
+                    }, 50);
+                },
+                onExit: () => {
+                    const modal = document.getElementById('gitModal');
+                    if (modal) modal.classList.remove('visible');
+                }
+            },
+            {
+                element: '.sidebar-tab[data-tab="source-control"]',
+                title: '✅ Source Control preview',
+                content: `<div style="font-size:12px;line-height:1.5">
+                            This is where Git integration lives for <strong>workspaces</strong> and <strong>multi‑file projects</strong>.
+                            <br><br>
+                            <strong>Changed Files</strong> – shows modified files.<br>
+                            <strong>Stage</strong> – pick which files go into the next commit.<br>
+                            <strong>Commit</strong> – save a snapshot with a message.<br>
+                            <strong>Push</strong> – send commits to GitHub.<br><br>
+                            Right now you are in <strong>single‑file</strong> mode, so this view is just a
+                            <em>demo</em> – it stays empty on purpose. Open a workspace or a real multi‑file
+                            project to see actual changes here.
+                            Note: If you are in Multi-File Project, you MUST go to Git WorkSpace Sync, add a Repo URL, Then Configure Repo, If you are on Local Workspace, then all you have to do is put a Repo URL and close it.
+                        </div>`,
+                position: 'middle',
+                animation: 'pulse-fast',
+                onExit: () => {
+                    const filesTab = document.querySelector('.sidebar-tab[data-tab="files"]');
+                    if (filesTab instanceof HTMLButtonElement) {
+                        filesTab.click();
+                    }
+                }
             }
         ];
 
@@ -2618,23 +2778,73 @@ class ScriptFlowEditor {
 
     startTour(steps) {
         let currentStep = 0;
+
+        document.querySelector('.tour-overlay')?.remove();
+        document.querySelector('.tour-tooltip')?.remove();
+
         const tourOverlay = document.createElement('div');
         tourOverlay.className = 'tour-overlay';
+        tourOverlay.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: transparent;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+            z-index: 100000;
+            pointer-events: none;
+        `;
 
         const tourTooltip = document.createElement('div');
         tourTooltip.className = 'tour-tooltip';
+        tourTooltip.style.cssText = `
+            position: fixed; min-width: 320px; max-width: 400px; 
+            background: var(--bg); border: 1px solid var(--border); 
+            border-radius: var(--radius); padding: 20px; 
+            box-shadow: 0 20px 60px rgba(0,0,0,0.4); 
+            font-family: inherit; color: var(--text); 
+            z-index: 100001; pointer-events: all;
+            opacity: 0; transform: scale(0.9); transition: all 0.3s cubic-bezier(0.25,0.8,0.25,1);
+        `;
+
+        if (!document.querySelector('#tour-animations')) {
+            const style = document.createElement('style');
+            style.id = 'tour-animations';
+            style.textContent = `
+                @keyframes tour-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.05)} }
+                @keyframes tour-bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-10px)} }
+                @keyframes tour-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-4px)} 75%{transform:translateX(4px)} }
+                @keyframes tour-fade-in { from {opacity:0; transform:translateY(10px)} to {opacity:1; transform:translateY(0)} }
+                .tour-pulse { animation: tour-pulse 2s infinite; }
+                .tour-bounce { animation: tour-bounce 1s; }
+                .tour-shake { animation: tour-shake 0.6s; }
+                .tour-fade-in { animation: tour-fade-in 0.5s; }
+                .tour-highlight { 
+                    box-shadow: 0 0 0 3px #00d4ff, 0 0 0 6px rgba(0,212,255,0.3) !important;
+                    border-radius: 4px !important; 
+                    animation: tour-pulse 1.5s infinite !important;
+                }
+                .tour-context-active { background: rgba(0,212,255,0.1) !important; }
+            `;
+            document.head.appendChild(style);
+        }
 
         const highlightElement = (element) => {
-            document.querySelectorAll('.tour-highlight').forEach(el => el.classList.remove('tour-highlight'));
-            document.querySelectorAll('.tour-context-active').forEach(el => el.classList.remove('tour-context-active'));
-
+            document.querySelectorAll('.tour-highlight, .tour-context-active').forEach(el => {
+                el.classList.remove('tour-highlight', 'tour-context-active', 'tour-pulse', 'tour-bounce', 'tour-shake');
+            });
             if (element) {
                 element.classList.add('tour-highlight');
-                const header = element.closest('.header');
-                if (header) {
-                    header.classList.add('tour-context-active');
-                }
+                element.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center'
+                });
+                const header = element.closest('.header, .sidebar, .toolbar');
+                if (header) header.classList.add('tour-context-active');
             }
+        };
+
+        const animateIn = (el) => {
+            el.style.opacity = '1';
+            el.style.transform = 'scale(1)';
         };
 
         const showStep = (stepIndex) => {
@@ -2644,65 +2854,151 @@ class ScriptFlowEditor {
             }
 
             const step = steps[stepIndex];
+
+            if (typeof step.onEnter === 'function') {
+                step.onEnter();
+            }
+
             const targetElement = document.querySelector(step.element);
 
-            if (!targetElement) {
-                console.warn('Tour element not found:', step.element);
+            if (!targetElement?.offsetParent) {
+                console.warn('Tour step skipped:', step.element);
                 showStep(stepIndex + 1);
                 return;
             }
 
             highlightElement(targetElement);
-
             tourTooltip.innerHTML = `
-                <h4>${step.title}</h4>
-                <p>${step.content}</p>
-                <div class="tour-actions">
-                    <button id="tour-next">${stepIndex === steps.length - 1 ? 'Finish' : 'Next'}</button>
-                    <button id="tour-skip">Skip Tour</button>
+                <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:12px">
+                    <h4 style="margin:0;font-size:16px;font-weight:600">${step.title}</h4>
+                    <span style="font-size:12px;color:var(--muted);font-weight:500">
+                        ${stepIndex + 1} / ${steps.length}
+                    </span>
+                </div>
+                <div style="font-size:14px;line-height:1.5">${step.content}</div>
+                <div class="tour-actions" style="margin-top:20px;display:flex;gap:8px;justify-content:flex-end">
+                    <button id="tour-back" class="btn btn-secondary" style="padding:6px 12px;font-size:13px;display:${stepIndex===0?'none':'inline-flex'}">
+                        ← Back
+                    </button>
+                    <button id="tour-skip" class="btn btn-secondary" style="padding:6px 12px;font-size:13px">
+                        Skip
+                    </button>
+                    <button id="tour-next" class="btn btn-primary" style="padding:6px 16px;font-size:13px">
+                        ${stepIndex === steps.length - 1 ? 'Finish 🎉' : 'Next →'}
+                    </button>
                 </div>
             `;
 
-            document.body.appendChild(tourTooltip);
+            if (!document.body.contains(tourTooltip)) {
+                document.body.appendChild(tourTooltip);
+            }
 
             const targetRect = targetElement.getBoundingClientRect();
             const tooltipRect = tourTooltip.getBoundingClientRect();
+            const padding = 15;
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
 
-            let top, left;
-            switch (step.position) {
-                case 'bottom':
-                    top = targetRect.bottom + 10;
-                    left = targetRect.left + (targetRect.width / 2) - (tooltipRect.width / 2);
-                    break;
-                case 'top':
-                    top = targetRect.top - tooltipRect.height - 10;
-                    left = targetRect.left + (targetRect.width / 2) - (tooltipRect.width / 2);
-                    break;
-                case 'left':
-                    top = targetRect.top + (targetRect.height / 2) - (tooltipRect.height / 2);
-                    left = targetRect.right + 10;
-                    break;
-                default: // right
-                    top = targetRect.top + (targetRect.height / 2) - (tooltipRect.height / 2);
-                    left = targetRect.left - tooltipRect.width - 10;
+            const getCoords = (pos) => {
+                const positions = {
+                    bottom: {
+                        top: targetRect.bottom + padding,
+                        left: targetRect.left + (targetRect.width / 2) - (tooltipRect.width / 2)
+                    },
+                    top: {
+                        top: targetRect.top - tooltipRect.height - padding,
+                        left: targetRect.left + (targetRect.width / 2) - (tooltipRect.width / 2)
+                    },
+                    left: {
+                        top: targetRect.top + (targetRect.height / 2) - (tooltipRect.height / 2),
+                        left: targetRect.left - tooltipRect.width - padding
+                    },
+                    right: {
+                        top: targetRect.top + (targetRect.height / 2) - (tooltipRect.height / 2),
+                        left: targetRect.right + padding
+                    }
+                };
+                return positions[pos] || positions.bottom;
+            };
+
+            let coords = getCoords(step.position);
+
+            if (coords.top < padding || coords.top + tooltipRect.height > vh - padding ||
+                coords.left < padding || coords.left + tooltipRect.width > vw - padding) {
+                const opposites = {
+                    top: 'bottom',
+                    bottom: 'top',
+                    left: 'right',
+                    right: 'left'
+                };
+                const altCoords = getCoords(opposites[step.position] || 'bottom');
+                if (altCoords.top >= padding && altCoords.left >= padding &&
+                    altCoords.top + tooltipRect.height <= vh - padding &&
+                    altCoords.left + tooltipRect.width <= vw - padding) {
+                    coords = altCoords;
+                }
             }
 
-            tourTooltip.style.top = `${Math.max(10, top)}px`;
-            tourTooltip.style.left = `${Math.max(10, left)}px`;
+            coords.left = Math.max(padding, Math.min(coords.left, vw - tooltipRect.width - padding));
+            coords.top = Math.max(padding, Math.min(coords.top, vh - tooltipRect.height - padding));
 
-            document.getElementById('tour-next').onclick = () => showStep(stepIndex + 1);
-            document.getElementById('tour-skip').onclick = endTour;
+            tourTooltip.style.left = `${coords.left}px`;
+            tourTooltip.style.top = `${coords.top}px`;
+
+            requestAnimationFrame(() => animateIn(tourTooltip));
+
+            ['tour-next', 'tour-back', 'tour-skip'].forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    btn.replaceWith(btn.cloneNode(true));
+                }
+            });
+
+            const nextBtn = document.getElementById('tour-next');
+            const backBtn = document.getElementById('tour-back');
+            const skipBtn = document.getElementById('tour-skip');
+
+            if (nextBtn) {
+                nextBtn.onclick = () => {
+                    if (typeof steps[stepIndex].onExit === 'function') {
+                        steps[stepIndex].onExit();
+                    }
+                    showStep(stepIndex + 1);
+                };
+            }
+            if (backBtn) {
+                backBtn.onclick = () => {
+                    if (typeof steps[stepIndex].onExit === 'function') {
+                        steps[stepIndex].onExit();
+                    }
+                    showStep(stepIndex - 1);
+                };
+            }
+            if (skipBtn) {
+                skipBtn.onclick = () => {
+                    if (typeof steps[stepIndex].onExit === 'function') {
+                        steps[stepIndex].onExit();
+                    }
+                    endTour();
+                };
+            }
         };
 
         const endTour = () => {
-            tourOverlay.remove();
-            tourTooltip.remove();
-            highlightElement(null);
-            localStorage.setItem('scriptflow-tour-complete', 'true');
+            tourOverlay.style.opacity = '0';
+            tourTooltip.style.opacity = '0';
+            tourTooltip.style.transform = 'scale(0.9)';
+            setTimeout(() => {
+                tourOverlay.remove();
+                tourTooltip.remove();
+                document.querySelector('#tour-animations')?.remove();
+                highlightElement(null);
+                localStorage.setItem('scriptflow-tour-complete', 'true');
+            }, 300);
         };
 
         document.body.appendChild(tourOverlay);
-        showStep(currentStep);
+        requestAnimationFrame(() => showStep(currentStep));
     }
 
     setupCommands() {
