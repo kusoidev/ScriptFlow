@@ -65,6 +65,7 @@ class ScriptFlowEditor {
         this.grants = [];
         this.editor = null;
         this.scripts = [];
+        this.typoDecorationIds = [];
         this.mode = 'extension';
         this.fileHandle = null;
         this.workspaceHandle = null;
@@ -1803,50 +1804,183 @@ class ScriptFlowEditor {
         return candidates.find(c => files.includes(c)) || null;
     }
 
-    /*SetupSmartImports() {
-        const editor = this;
+    CollectDefinedIdentifiers(model) {
+		// this was chatgpted cuz im lazy to redo the regex
+        const text = model.getValue();
+        const ids = new Set();
+        let m;
+
+        const importDefault = /\bimport\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\b/g;
+        while ((m = importDefault.exec(text)) !== null) ids.add(m[1]);
+
+        const importNamed = /\bimport\s*{([^}]+)}\s*from\b/g;
+        while ((m = importNamed.exec(text)) !== null) {
+            const parts = m[1].split(',');
+            for (const p of parts) {
+                const nm = /([A-Za-z_$][A-Za-z0-9_$]*)/.exec(p.trim());
+                if (nm) ids.add(nm[1]);
+            }
+        }
+
+        const varLike = /\b(var|let|const)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
+        while ((m = varLike.exec(text)) !== null) ids.add(m[2]);
+
+        const funcDecl = /\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g;
+        while ((m = funcDecl.exec(text)) !== null) ids.add(m[1]);
+
+        const classDecl = /\bclass\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/g;
+        while ((m = classDecl.exec(text)) !== null) ids.add(m[1]);
+
+        const arrowFunc = /\b([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*\([^)]*\)\s*=>/g;
+        while ((m = arrowFunc.exec(text)) !== null) ids.add(m[1]);
+
+        return Array.from(ids);
+    }
+
+    Levenshtein(a, b) {
+        const la = a.length,
+            lb = b.length;
+        const dp = Array.from({
+            length: la + 1
+        }, () => new Array(lb + 1).fill(0));
+        for (let i = 0; i <= la; i++) dp[i][0] = i;
+        for (let j = 0; j <= lb; j++) dp[0][j] = j;
+        for (let i = 1; i <= la; i++) {
+            for (let j = 1; j <= lb; j++) {
+                const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+                dp[i][j] = Math.min(
+                    dp[i - 1][j] + 1,
+                    dp[i][j - 1] + 1,
+                    dp[i - 1][j - 1] + cost
+                );
+            }
+        }
+        return dp[la][lb];
+    }
+
+    FindClosestIdentifier(name, candidates, maxDistance = 3) {
+        let best = null;
+        let bestDist = Infinity;
+        for (const c of candidates) {
+            if (c === name) continue;
+            const d = this.Levenshtein(name, c);
+            if (d < bestDist) {
+                bestDist = d;
+                best = c;
+            }
+        }
+        return best && bestDist <= maxDistance ? best : null;
+    }
+
+    SetupTypoCorrection() {
+        const self = this;
 
         monaco.languages.registerCompletionItemProvider('javascript', {
-            triggerCharacters: [' '],
-            provideCompletionItems: async (model, position) => {
-                const lineText = model.getLineContent(position.lineNumber);
-                const textUntilPos = lineText.slice(0, position.column - 1);
+            triggerCharacters: [
+                '.', ' ', '\n',
+                'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+                'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+                'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+                'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'
+            ],
 
-                const fnMatch = textUntilPos.match(/import\s+([\w$]+)\s+from\s*$/);
-                if (!fnMatch) {
+            provideCompletionItems: (model, position) => {
+                const wordUntil = model.getWordUntilPosition(position);
+                const fullWord = model.getWordAtPosition(position) || wordUntil;
+                const name = fullWord && fullWord.word;
+
+                if (!name || name.length < 3) {
                     return {
                         suggestions: []
                     };
                 }
 
-                const symbolName = fnMatch[1];
+                const definedIds = self.CollectDefinedIdentifiers(model);
 
-                const match = await editor.FindSingleFileExporting(symbolName);
-                if (!match) {
+                if (definedIds.includes(name)) {
                     return {
                         suggestions: []
                     };
                 }
 
-                const rel = editor.getRelativeImportPath(match);
+                const closest = self.FindClosestIdentifier(name, definedIds);
+                if (!closest || closest === name) {
+                    return {
+                        suggestions: []
+                    };
+                }
+
+                const range = new monaco.Range(
+                    position.lineNumber,
+                    fullWord.startColumn,
+                    position.lineNumber,
+                    fullWord.endColumn
+                );
+
+                self.typoDecorationIds = model.deltaDecorations(self.typoDecorationIds, [{
+                    range,
+                    options: {
+                        inlineClassName: 'typoFixUnderline',
+                        hoverMessage: {
+                            value: `Did you mean ${closest}?`
+                        },
+                        description: 'TypoFix'
+                    }
+                }]);
 
                 return {
                     suggestions: [{
-                        label: rel,
-                        kind: monaco.languages.CompletionItemKind.Module,
-                        insertText: `"${rel}"`,
-                        range: {
-                            startLineNumber: position.lineNumber,
-                            endLineNumber: position.lineNumber,
-                            startColumn: position.column,
-                            endColumn: position.column
-                        },
-                        detail: `${symbolName} → ${match}`
+                        label: closest,
+                        kind: monaco.languages.CompletionItemKind.Text,
+                        insertText: closest,
+                        range,
+                        sortText: '0000',
+                        detail: 'Fix typo'
                     }]
                 };
             }
         });
-    }*/
+    }
+
+    RunTypoAnalysis() {
+        if (!this.editor) return;
+        const model = this.editor.getModel();
+        if (!model) return;
+
+        this.typoDecorationIds = model.deltaDecorations(this.typoDecorationIds || [], []);
+
+        const pos = this.editor.getPosition();
+        if (!pos) return;
+
+        const wordInfo = model.getWordAtPosition(pos);
+        if (!wordInfo || !wordInfo.word || wordInfo.word.length < 3) return;
+
+        const name = wordInfo.word;
+        const range = new monaco.Range(
+            pos.lineNumber,
+            wordInfo.startColumn,
+            pos.lineNumber,
+            wordInfo.endColumn
+        );
+
+        const definedIds = this.CollectDefinedIdentifiers(model);
+
+        if (definedIds.includes(name)) return;
+
+        const closest = this.FindClosestIdentifier(name, definedIds);
+        if (!closest || closest === name) return;
+
+        this.typoDecorationIds = model.deltaDecorations(this.typoDecorationIds, [{
+            range,
+            options: {
+                inlineClassName: 'typoFixUnderline',
+                hoverMessage: {
+                    value: `Did you mean **${closest}**?`
+                },
+                description: 'TypoFix'
+            }
+        }]);
+    }
 
     SetupSmartImports() {
         const editor = this;
@@ -2635,8 +2769,18 @@ class ScriptFlowEditor {
     }
 
     setupDebouncedValidation() {
-        if (!monaco?.languages?.typescript) return;
-        monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
+        if (!this.editor) return;
+
+        const debounced = (() => {
+            let t;
+            return () => {
+                clearTimeout(t);
+                t = setTimeout(() => this.RunTypoAnalysis(), 120); // 1 tick, which is literally from moomoo :sob:
+            };
+        })();
+
+        this.editor.onDidChangeModelContent(debounced);
+        this.editor.onDidChangeCursorPosition(debounced);
     }
 
     UpdateVersionBadge() {
@@ -2736,6 +2880,7 @@ class ScriptFlowEditor {
         this.setupEditorSettings();
         this.setupSnippets();
         this.SetupSmartImports();
+        this.SetupTypoCorrection();
 
         this.setupDebouncedValidation();
 
@@ -4188,6 +4333,102 @@ class ScriptFlowEditor {
                     }
                 });
 
+                monaco.languages.registerCodeActionProvider('javascript', {
+                    provideCodeActions: function(model, range, context) {
+                        const editorModel = this.editor && this.editor.getModel();
+                        if (!editorModel || editorModel.uri.toString() !== model.uri.toString()) {
+                            return {
+                                actions: [],
+                                dispose() {}
+                            };
+                        }
+
+                        if (range.isEmpty()) {
+                            const word = model.getWordAtPosition(range.getStartPosition());
+                            if (word) {
+                                range = new monaco.Range(
+                                    range.startLineNumber,
+                                    word.startColumn,
+                                    range.startLineNumber,
+                                    word.endColumn
+                                );
+                            }
+                        }
+
+                        const decorations = model.getDecorationsInRange(range).filter(d => d.options.description === 'TypoFix');
+
+                        const actions = [];
+
+                        for (const d of decorations) {
+                            const typoRange = d.range;
+                            const word = model.getValueInRange(typoRange);
+                            const identifiers = this.CollectDefinedIdentifiers(model);
+                            const closest = this.FindClosestIdentifier(word, identifiers);
+                            if (!closest || closest === word) continue;
+
+                            actions.push({
+                                title: `Replace with '${closest}'`,
+                                kind: 'quickfix',
+                                edit: {
+                                    edits: [{
+                                        resource: editorModel.uri,
+                                        textEdit: {
+                                            range: typoRange,
+                                            text: closest,
+                                        },
+                                    }],
+                                },
+                                isPreferred: true,
+                            });
+                        }
+
+                        return {
+                            actions,
+                            dispose() {}
+                        };
+                    }.bind(this)
+                });
+
+                monaco.languages.registerInlineCompletionsProvider('javascript', {
+                    provideInlineCompletions: (model, position, context, token) => {
+                        const wordInfo = model.getWordAtPosition(position);
+                        if (!wordInfo || !wordInfo.word || wordInfo.word.length < 3) {
+                            return {
+                                items: []
+                            };
+                        }
+
+                        const name = wordInfo.word;
+
+                        const identifiers = this.CollectDefinedIdentifiers(model);
+                        const closest = this.FindClosestIdentifier(name, identifiers);
+                        if (!closest || closest === name) {
+                            return {
+                                items: []
+                            };
+                        }
+
+                        const range = new monaco.Range(
+                            position.lineNumber,
+                            wordInfo.startColumn,
+                            position.lineNumber,
+                            wordInfo.endColumn
+                        );
+
+                        return {
+                            items: [{
+                                insertText: closest,
+                                range: range,
+                                command: undefined
+                            }]
+                        };
+                    },
+
+                    freeInlineCompletions() {
+                        // nothing to clean up
+                    }
+                });
+
                 this.editor = monaco.editor.create(document.getElementById('codeEditorContainer'), {
                     language: 'javascript',
                     theme: 'dracula',
@@ -4210,6 +4451,9 @@ class ScriptFlowEditor {
                     },
                     suggest: {
                         preview: true
+                    },
+                    lightbulb: {
+                        enabled: 'on'
                     }
                 });
 
@@ -4223,6 +4467,51 @@ class ScriptFlowEditor {
                 this.editor.addCommand(
                     monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
                     () => this.save()
+                );
+
+                this.editor.addCommand(
+                    monaco.KeyCode.Tab,
+                    () => {
+                        const model = this.editor.getModel();
+                        const pos = this.editor.getPosition();
+                        if (!model || !pos) {
+                            this.editor.trigger('keyboard', 'tab', {});
+                            return;
+                        }
+
+                        let range = new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column);
+                        const word = model.getWordAtPosition(pos);
+                        if (word) {
+                            range = new monaco.Range(
+                                pos.lineNumber,
+                                word.startColumn,
+                                pos.lineNumber,
+                                word.endColumn
+                            );
+                        }
+
+                        const decorations = model.getDecorationsInRange(range).filter(d => d.options.description === 'TypoFix');
+
+                        if (decorations.length === 0) {
+                            this.editor.trigger('keyboard', 'tab', {});
+                            return;
+                        }
+
+                        const typoRange = decorations[0].range;
+                        const typoWord = model.getValueInRange(typoRange);
+                        const identifiers = this.CollectDefinedIdentifiers(model);
+                        const closest = this.FindClosestIdentifier(typoWord, identifiers);
+
+                        if (closest && closest !== typoWord) {
+                            this.editor.executeEdits('typo-fix', [{
+                                range: typoRange,
+                                text: closest
+                            }]);
+                            this.typoDecorationIds = model.deltaDecorations(this.typoDecorationIds, []);
+                        } else {
+                            this.editor.trigger('keyboard', 'tab', {});
+                        }
+                    }
                 );
 
                 this.editor.addCommand(
