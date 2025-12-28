@@ -1,3 +1,12 @@
+import {
+    RunTypoAnalysis,
+    SetupSmartImports,
+    SetupTypoCorrection,
+    getProjectFileList,
+    FindClosestIdentifier,
+    CollectDefinedIdentifiers,
+    GetFileExportsSummary
+} from "./services/LanguageService.js";
 // src: https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API
 // just a simple wrapper for indexeddb makes it easier to use with promises
 class IDBHelper {
@@ -964,7 +973,7 @@ class ScriptFlowEditor {
                             force: true
                         });
                     } catch (fetchErr) {
-						// not needed since the only error i can think off is "Could not find (branch name)"
+                        // not needed since the only error i can think off is "Could not find (branch name)"
                         //console.warn('syncWorkspaceToGit: Fetch/checkout error:', fetchErr);
                     }
                 }
@@ -1745,45 +1754,6 @@ class ScriptFlowEditor {
         document.getElementById('settingsModal').classList.remove('visible');
     }
 
-    getProjectFileList() {
-        const files = [];
-
-        if (this.mode === 'multi-file-edit' && this.script?.files) {
-            for (const path of Object.keys(this.script.files)) {
-                if (path.toLowerCase().endsWith('.js')) {
-                    files.push(path);
-                }
-            }
-        } else if (this.mode === 'workspace' && this.workspaceHandle) {
-            const tree = document.getElementById('fileTree');
-            if (!tree) return files;
-            tree.querySelectorAll('.tree-item[data-kind="file"]').forEach(item => {
-                const p = item.dataset.path;
-                if (p && p.toLowerCase().endsWith('.js')) files.push(p);
-            });
-        }
-
-        return files;
-    }
-
-    getRelativeImportPath(targetPath) {
-        if (!this.currentPath) return './' + targetPath;
-
-        const fromParts = this.currentPath.split('/').slice(0, -1); // dir of current file
-        const toParts = targetPath.split('/');
-
-        let i = 0;
-        while (i < fromParts.length && i < toParts.length && fromParts[i] === toParts[i]) {
-            i++;
-        }
-
-        const up = fromParts.length - i;
-        const down = toParts.slice(i).join('/');
-
-        const prefix = up > 0 ? '../'.repeat(up) : './';
-        return prefix + down;
-    }
-
     resolveImportToProjectFile(fromPath, importPath) {
         if (!importPath.startsWith('.') && !importPath.startsWith('/')) return null;
 
@@ -1801,424 +1771,8 @@ class ScriptFlowEditor {
 
         // try direct, with .js, .mjs, .jsx
         const candidates = [combined, combined + '.js', combined + '.mjs', combined + '.jsx'];
-        const files = this.getProjectFileList();
+        const files = getProjectFileList(this);
         return candidates.find(c => files.includes(c)) || null;
-    }
-
-    CollectDefinedIdentifiers(model) {
-        // this was chatgpted cuz im lazy to redo the regex
-        const text = model.getValue();
-        const ids = new Set();
-        let m;
-
-        const importDefault = /\bimport\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\b/g;
-        while ((m = importDefault.exec(text)) !== null) ids.add(m[1]);
-
-        const importNamed = /\bimport\s*{([^}]+)}\s*from\b/g;
-        while ((m = importNamed.exec(text)) !== null) {
-            const parts = m[1].split(',');
-            for (const p of parts) {
-                const nm = /([A-Za-z_$][A-Za-z0-9_$]*)/.exec(p.trim());
-                if (nm) ids.add(nm[1]);
-            }
-        }
-
-        const varLike = /\b(var|let|const)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
-        while ((m = varLike.exec(text)) !== null) ids.add(m[2]);
-
-        const funcDecl = /\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g;
-        while ((m = funcDecl.exec(text)) !== null) ids.add(m[1]);
-
-        const classDecl = /\bclass\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/g;
-        while ((m = classDecl.exec(text)) !== null) ids.add(m[1]);
-
-        const arrowFunc = /\b([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*\([^)]*\)\s*=>/g;
-        while ((m = arrowFunc.exec(text)) !== null) ids.add(m[1]);
-
-        return Array.from(ids);
-    }
-
-    Levenshtein(a, b) {
-        const la = a.length,
-            lb = b.length;
-        const dp = Array.from({
-            length: la + 1
-        }, () => new Array(lb + 1).fill(0));
-        for (let i = 0; i <= la; i++) dp[i][0] = i;
-        for (let j = 0; j <= lb; j++) dp[0][j] = j;
-        for (let i = 1; i <= la; i++) {
-            for (let j = 1; j <= lb; j++) {
-                const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-                dp[i][j] = Math.min(
-                    dp[i - 1][j] + 1,
-                    dp[i][j - 1] + 1,
-                    dp[i - 1][j - 1] + cost
-                );
-            }
-        }
-        return dp[la][lb];
-    }
-
-    FindClosestIdentifier(name, candidates, maxDistance = 3) {
-        let best = null;
-        let bestDist = Infinity;
-        for (const c of candidates) {
-            if (c === name) continue;
-            const d = this.Levenshtein(name, c);
-            if (d < bestDist) {
-                bestDist = d;
-                best = c;
-            }
-        }
-        return best && bestDist <= maxDistance ? best : null;
-    }
-
-    SetupTypoCorrection() {
-        const self = this;
-
-        monaco.languages.registerCompletionItemProvider('javascript', {
-            triggerCharacters: [
-                '.', ' ', '\n',
-                'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
-                'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-                'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
-                'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'
-            ],
-
-            provideCompletionItems: (model, position) => {
-                const wordUntil = model.getWordUntilPosition(position);
-                const fullWord = model.getWordAtPosition(position) || wordUntil;
-                const name = fullWord && fullWord.word;
-
-                if (!name || name.length < 3) {
-                    return {
-                        suggestions: []
-                    };
-                }
-
-                const definedIds = self.CollectDefinedIdentifiers(model);
-
-                if (definedIds.includes(name)) {
-                    return {
-                        suggestions: []
-                    };
-                }
-
-                const closest = self.FindClosestIdentifier(name, definedIds);
-                if (!closest || closest === name) {
-                    return {
-                        suggestions: []
-                    };
-                }
-
-                const range = new monaco.Range(
-                    position.lineNumber,
-                    fullWord.startColumn,
-                    position.lineNumber,
-                    fullWord.endColumn
-                );
-
-                self.typoDecorationIds = model.deltaDecorations(self.typoDecorationIds, [{
-                    range,
-                    options: {
-                        inlineClassName: 'typoFixUnderline',
-                        hoverMessage: {
-                            value: `Did you mean ${closest}?`
-                        },
-                        description: 'TypoFix'
-                    }
-                }]);
-
-                return {
-                    suggestions: [{
-                        label: closest,
-                        kind: monaco.languages.CompletionItemKind.Text,
-                        insertText: closest,
-                        range,
-                        sortText: '0000',
-                        detail: 'Fix typo'
-                    }]
-                };
-            }
-        });
-    }
-
-    RunTypoAnalysis() {
-        if (!this.editor) return;
-        const model = this.editor.getModel();
-        if (!model) return;
-
-        this.typoDecorationIds = model.deltaDecorations(this.typoDecorationIds || [], []);
-
-        const pos = this.editor.getPosition();
-        if (!pos) return;
-
-        const wordInfo = model.getWordAtPosition(pos);
-        if (!wordInfo || !wordInfo.word || wordInfo.word.length < 3) return;
-
-        const name = wordInfo.word;
-        const range = new monaco.Range(
-            pos.lineNumber,
-            wordInfo.startColumn,
-            pos.lineNumber,
-            wordInfo.endColumn
-        );
-
-        const definedIds = this.CollectDefinedIdentifiers(model);
-
-        if (definedIds.includes(name)) return;
-
-        const closest = this.FindClosestIdentifier(name, definedIds);
-        if (!closest || closest === name) return;
-
-        this.typoDecorationIds = model.deltaDecorations(this.typoDecorationIds, [{
-            range,
-            options: {
-                inlineClassName: 'typoFixUnderline',
-                hoverMessage: {
-                    value: `Did you mean **${closest}**?`
-                },
-                description: 'TypoFix'
-            }
-        }]);
-    }
-
-    SetupSmartImports() {
-        const editor = this;
-
-        monaco.languages.registerInlineCompletionsProvider('javascript', {
-            async provideInlineCompletions(model, position, context, token) {
-                const lineText = model.getLineContent(position.lineNumber);
-                const textUntilPos = lineText.slice(0, position.column);
-
-                const fnMatch = textUntilPos.match(/import\s+([\w$]+)\s+from\s*$/);
-                if (!fnMatch) return { items: [] };
-
-                const symbolName = fnMatch[1];
-                const matches = await editor.FindFilesExporting(symbolName);
-                
-                if (!matches || matches.length === 0) return { items: [] };
-
-                const chosenPath = matches[0];
-                const rel = editor.getRelativeImportPath(chosenPath);
-                
-                const hasQuote = /['"]$/.test(textUntilPos);
-                const insertText = hasQuote ? rel + '"' : `"${rel}"`; 
-
-                return {
-                    items: [{
-                        insertText: insertText,
-                        range: new monaco.Range(
-                            position.lineNumber,
-                            position.column,
-                            position.lineNumber,
-                            position.column
-                        )
-                    }]
-                };
-            },
-            freeInlineCompletions() {}
-        });
-
-        monaco.languages.registerCompletionItemProvider('javascript', {
-            triggerCharacters: [' ', '"', "'", '/'], 
-            provideCompletionItems: async (model, position) => {
-                const lineText = model.getLineContent(position.lineNumber);
-                const textUntilPos = lineText.slice(0, position.column);
-
-                const fnMatch = textUntilPos.match(/import\s+([\w$]+)\s+from\s*['"]?$/);
-
-                if (!fnMatch) {
-                    return { suggestions: [] };
-                }
-
-                const symbolName = fnMatch[1];
-                let matches = await editor.FindFilesExporting(symbolName);
-                let isFallback = false;
-
-                if (!matches || matches.length === 0) {
-                    isFallback = true;
-                    if (editor.script && editor.script.files) {
-                        matches = Object.keys(editor.script.files);
-                    } else {
-                        matches = [];
-                    }
-                    
-                    if (editor.currentPath) {
-                        matches = matches.filter(p => p !== editor.currentPath);
-                    }
-                }
-
-                const suggestions = matches.map(path => {
-                    const rel = editor.getRelativeImportPath(path);
-                    
-                    const hasOpenQuote = /['"]$/.test(textUntilPos);
-                    const insertText = hasOpenQuote ? rel : `"${rel}"`;
-
-                    return {
-                        label: rel,
-                        kind: monaco.languages.CompletionItemKind.File,
-                        insertText: insertText,
-                        detail: isFallback ? `File: ${path}` : `Export: ${symbolName}`,
-                        sortText: isFallback ? '9999' : '0000' 
-                    };
-                });
-
-                return { suggestions };
-            }
-        });
-    }
-
-    async FindFilesExporting(name) {
-        const files = this.getProjectFileList();
-        const matches = [];
-
-        const needle = new RegExp(`\\b${name}\\b`);
-
-        for (const filePath of files) {
-            try {
-                const summary = await this.GetFileExportsSummary(filePath);
-                if (!summary || summary === '_No exports detected in this file._') continue;
-
-                if (needle.test(summary)) {
-                    matches.push(filePath);
-                }
-            } catch (e) {
-                console.warn('SmartImports: error in', filePath, e);
-            }
-        }
-
-        return matches;
-    }
-
-     async GetFileExportsSummary(path) {
-        let code = null;
-
-        if (this.mode === 'multi-file-edit' && this.script?.files?.[path]) {
-            code = this.script.files[path];
-        } else if (this.mode === 'workspace' && this.workspaceHandle) {
-            code = await this.getFile(path);
-        }
-
-        if (!code || typeof code !== 'string') return null;
-
-        const lines = code.split('\n');
-        const exports = new Set();
-
-        for (const rawLine of lines) {
-            const line = rawLine.trim();
-            let m;
-
-            // export default class Blah { ... }
-            if ((m = line.match(/^export\s+default\s+class\s+([A-Za-z0-9_]+)/))) {
-                exports.add(`default class: ${m[1]}`);
-            }
-            // export class Blah { ... }
-            else if ((m = line.match(/^export\s+class\s+([A-Za-z0-9_]+)/))) {
-                exports.add(`class: ${m[1]}`);
-            }
-            // export default function Blah() { ... }
-            else if ((m = line.match(/^export\s+default\s+function\s+([A-Za-z0-9_]+)/))) {
-                exports.add(`default function: ${m[1]}`);
-            }
-            // export function Blah() { ... }
-            else if ((m = line.match(/^export\s+function\s+([A-Za-z0-9_]+)/))) {
-                exports.add(`function: ${m[1]}`);
-            }
-            // export const Blah = ...
-            else if ((m = line.match(/^export\s+const\s+([A-Za-z0-9_]+)/))) {
-                exports.add(`const: ${m[1]}`);
-            }
-            // export let Blah = ...
-            else if ((m = line.match(/^export\s+let\s+([A-Za-z0-9_]+)/))) {
-                exports.add(`let: ${m[1]}`);
-            }
-            // export var Blah = ...
-            else if ((m = line.match(/^export\s+var\s+([A-Za-z0-9_]+)/))) {
-                exports.add(`var: ${m[1]}`);
-            }
-            // export { a, b as c }
-            else if ((m = line.match(/^export\s*{\s*([^}]+)\s*}/))) {
-                const parts = m[1].split(',');
-                for (const part of parts) {
-                    const p = part.trim();
-                    const asMatch = p.match(/^([A-Za-z0-9_]+)\s+as\s+([A-Za-z0-9_]+)/);
-                    if (asMatch) {
-                        exports.add(`named: ${asMatch[2]} (from ${asMatch[1]})`);
-                    } else {
-                        const simple = p.match(/^([A-Za-z0-9_]+)/);
-                        if (simple) {
-                            exports.add(`named: ${simple[1]}`);
-                        }
-                    }
-                }
-            }
-            // export * from './Blah'
-            else if ((m = line.match(/^export\s+\*\s+from\s+['"]([^'"]+)['"]/))) {
-                exports.add(`re-export * from: ${m[1]}`);
-            }
-            // export { a, b } from './Blah'
-            else if ((m = line.match(/^export\s*{\s*([^}]+)\s*}\s*from\s+['"]([^'"]+)['"]/))) {
-                const fromPath = m[2];
-                const parts = m[1].split(',');
-                for (const part of parts) {
-                    const p = part.trim();
-                    const asMatch = p.match(/^([A-Za-z0-9_]+)\s+as\s+([A-Za-z0-9_]+)/);
-                    if (asMatch) {
-                        exports.add(`re-export: ${asMatch[2]} (from ${fromPath})`);
-                    } else {
-                        const simple = p.match(/^([A-Za-z0-9_]+)/);
-                        if (simple) {
-                            exports.add(`re-export: ${simple[1]} (from ${fromPath})`);
-                        }
-                    }
-                }
-            }
-            // export default Blah;
-            else if ((m = line.match(/^export\s+default\s+([A-Za-z0-9_]+)/))) {
-                const exportedVar = m[1];
-                exports.add(`default: ${exportedVar}`);
-
-                const ctorRegex = new RegExp(
-                    `\\b(const|let|var)\\s+${exportedVar}\\s*=\\s*new\\s+([A-Za-z0-9_]+)`
-                );
-
-                const ctorMatch = code.match(ctorRegex);
-                if (ctorMatch) {
-                    const className = ctorMatch[2];
-                    exports.add(`default instance of: ${className}`);
-                }
-            }
-            // module.exports = Blah
-            else if ((m = line.match(/^module\.exports\s*=\s*/))) {
-                if (line.match(/function/)) {
-                    const nameM = line.match(/function\s+([A-Za-z0-9_$]+)/);
-                    exports.add(nameM ? `commonjs default function: ${nameM[1]}` : `commonjs default function: (anonymous)`);
-                } else if (line.match(/class/)) {
-                    const nameM = line.match(/class\s+([A-Za-z0-9_$]+)/);
-                    exports.add(nameM ? `commonjs default class: ${nameM[1]}` : `commonjs default class: (anonymous)`);
-                } else if (line.match(/\{/)) {
-                    exports.add(`commonjs default object`);
-                } else {
-                    const idM = line.match(/^module\.exports\s*=\s*([A-Za-z0-9_$]+)/);
-                    exports.add(idM ? `commonjs default: ${idM[1]}` : `commonjs default export`);
-                }
-            }
-            // module.exports.name = Blah
-            else if ((m = line.match(/^module\.exports\.([A-Za-z0-9_$]+)\s*=/))) {
-                exports.add(`commonjs named: ${m[1]}`);
-            }
-            // exports.name = Blah
-            else if ((m = line.match(/^exports\.([A-Za-z0-9_$]+)\s*=/))) {
-                exports.add(`commonjs named: ${m[1]}`);
-            }
-        }
-
-        if (exports.size === 0) {
-            return '_No exports detected in this file._';
-        }
-
-        return Array.from(exports).slice(0, 20).map(e => `- ${e}`).join('\n');
     }
 
     setupSnippets() {
@@ -2385,41 +1939,6 @@ class ScriptFlowEditor {
             }
         });
 
-        /*monaco.languages.registerCompletionItemProvider('javascript', {
-            triggerCharacters: ['"', "'", '/', '.', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'],
-            provideCompletionItems: (model, position) => {
-                const textUntilPos = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
-
-                const importMatch = textUntilPos.match(/import\s+[^'"]*from\s+['"]([^'"]*)$/) || textUntilPos.match(/import\s+['"]([^'"]*)$/) || textUntilPos.match(/require\(\s*['"]([^'"]*)$/);
-
-                if (!importMatch) return {
-                    suggestions: []
-                };
-
-                const typed = importMatch[1] || '';
-                const files = this.getProjectFileList();
-                const suggestions = files.map(path => {
-                    const rel = this.getRelativeImportPath(path);
-                    return {
-                        label: rel,
-                        kind: monaco.languages.CompletionItemKind.Module,
-                        insertText: rel,
-                        range: {
-                            startLineNumber: position.lineNumber,
-                            endLineNumber: position.lineNumber,
-                            startColumn: position.column - typed.length,
-                            endColumn: position.column
-                        },
-                        detail: 'Project file',
-                    };
-                });
-
-                return {
-                    suggestions
-                };
-            }
-        });*/
-
         monaco.languages.registerHoverProvider('javascript', {
             provideHover: async (model, position) => {
                 const wordInfo = model.getWordAtPosition(position);
@@ -2440,7 +1959,7 @@ class ScriptFlowEditor {
                 const targetFile = this.resolveImportToProjectFile(currentPath, importPath);
                 if (!targetFile) return null;
 
-                const exportsInfo = await this.GetFileExportsSummary(targetFile);
+                const exportsInfo = await GetFileExportsSummary(targetFile, this);
                 if (!exportsInfo) return null;
 
                 return {
@@ -2810,7 +2329,7 @@ class ScriptFlowEditor {
             let t;
             return () => {
                 clearTimeout(t);
-                t = setTimeout(() => this.RunTypoAnalysis(), 120); // 1 tick, which is literally from moomoo :sob:
+                t = setTimeout(() => RunTypoAnalysis(this), 120); // 1 tick, which is literally from moomoo :sob:
             };
         })();
 
@@ -2910,12 +2429,17 @@ class ScriptFlowEditor {
         await this.CheckForUpdates();
         //this.ResetLocalGitRepo();
 
+        try {
+            SetupSmartImports(this);
+            SetupTypoCorrection(this);
+        } catch (e) {
+            console.error("Failed to setup language services:", e);
+        }
+
         this.UpdateVersionBadge();
         this.setupSourceControl();
         this.setupEditorSettings();
         this.setupSnippets();
-        this.SetupSmartImports();
-        this.SetupTypoCorrection();
 
         this.setupDebouncedValidation();
 
@@ -4092,24 +3616,18 @@ class ScriptFlowEditor {
 
     // a helper to get a file from either git fs or the local workspace
     async getFile(path, binary = false) {
-        console.log(`[getFile] Requested: "${path}", Binary: ${binary}, Mode: ${this.mode}`);
-
         if (this.mode === 'git') {
             const fullPath = `${this.gitDir}/${path}`;
-            console.log(`[getFile] Git full path: "${fullPath}"`);
 
             try {
                 const content = await this.fs.promises.readFile(fullPath, binary ? null : 'utf8');
-                console.log(`[getFile] Read from Git: ${fullPath} (${binary ? 'binary' : content.length + ' chars'})`);
                 return content;
             } catch (e) {
-                console.warn(`[getFile] Git file not found: ${fullPath}`, e.code);
                 return null;
             }
         } else if (this.mode === 'workspace' && this.workspaceHandle) {
             try {
                 const parts = path.split('/').filter(Boolean);
-                console.log(`[getFile] Workspace parts:`, parts);
                 let handle = this.workspaceHandle;
 
                 for (let i = 0; i < parts.length; i++) {
@@ -4124,15 +3642,12 @@ class ScriptFlowEditor {
 
                 const file = await handle.getFile();
                 const content = binary ? await file.arrayBuffer() : await file.text();
-                console.log(`[getFile] Read from workspace: ${path} (${binary ? 'binary' : content.length + ' chars'})`);
                 return content;
             } catch (e) {
-                console.warn(`[getFile] Workspace file not found: ${path}`, e.name);
                 return null;
             }
         }
 
-        console.warn('[getFile] No valid mode');
         return null;
     }
 
@@ -4211,11 +3726,11 @@ class ScriptFlowEditor {
                 monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
                     target: monaco.languages.typescript.ScriptTarget.ESNext,
                     allowNonTsExtensions: false,
-                    checkJs: false, // Changed to true for validation
+                    checkJs: false,
                     allowJs: true,
                     noImplicitAny: true,
                     strict: true,
-                    noUnusedLocals: true, // Enable to show unused variables
+                    noUnusedLocals: true,
                     noUnusedParameters: false,
                     noImplicitReturns: false,
                     noFallthroughCasesInSwitch: false,
@@ -4397,8 +3912,8 @@ class ScriptFlowEditor {
                         for (const d of decorations) {
                             const typoRange = d.range;
                             const word = model.getValueInRange(typoRange);
-                            const identifiers = this.CollectDefinedIdentifiers(model);
-                            const closest = this.FindClosestIdentifier(word, identifiers);
+                            const identifiers = CollectDefinedIdentifiers(model);
+                            const closest = FindClosestIdentifier(word, identifiers);
                             if (!closest || closest === word) continue;
 
                             actions.push({
@@ -4435,8 +3950,8 @@ class ScriptFlowEditor {
 
                         const name = wordInfo.word;
 
-                        const identifiers = this.CollectDefinedIdentifiers(model);
-                        const closest = this.FindClosestIdentifier(name, identifiers);
+                        const identifiers = CollectDefinedIdentifiers(model);
+                        const closest = FindClosestIdentifier(name, identifiers);
                         if (!closest || closest === name) {
                             return {
                                 items: []
@@ -4530,8 +4045,8 @@ class ScriptFlowEditor {
 
                         const typoRange = decorations[0].range;
                         const typoWord = model.getValueInRange(typoRange);
-                        const identifiers = this.CollectDefinedIdentifiers(model);
-                        const closest = this.FindClosestIdentifier(typoWord, identifiers);
+                        const identifiers = CollectDefinedIdentifiers(model);
+                        const closest = FindClosestIdentifier(typoWord, identifiers);
 
                         if (closest && closest !== typoWord) {
                             this.editor.executeEdits('typo-fix', [{
