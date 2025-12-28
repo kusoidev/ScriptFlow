@@ -1985,28 +1985,29 @@ class ScriptFlowEditor {
 
     SetupSmartImports() {
         const editor = this;
+
         monaco.languages.registerInlineCompletionsProvider('javascript', {
             async provideInlineCompletions(model, position, context, token) {
                 const lineText = model.getLineContent(position.lineNumber);
-                const textUntilPos = lineText.slice(0, position.column - 1);
+                const textUntilPos = lineText.slice(0, position.column);
 
                 const fnMatch = textUntilPos.match(/import\s+([\w$]+)\s+from\s*$/);
-                if (!fnMatch) return {
-                    items: []
-                };
+                if (!fnMatch) return { items: [] };
 
                 const symbolName = fnMatch[1];
                 const matches = await editor.FindFilesExporting(symbolName);
-                if (!matches || matches.length === 0) return {
-                    items: []
-                };
+                
+                if (!matches || matches.length === 0) return { items: [] };
 
                 const chosenPath = matches[0];
                 const rel = editor.getRelativeImportPath(chosenPath);
+                
+                const hasQuote = /['"]$/.test(textUntilPos);
+                const insertText = hasQuote ? rel + '"' : `"${rel}"`; 
 
                 return {
                     items: [{
-                        insertText: `"${rel}"`,
+                        insertText: insertText,
                         range: new monaco.Range(
                             position.lineNumber,
                             position.column,
@@ -2018,40 +2019,52 @@ class ScriptFlowEditor {
             },
             freeInlineCompletions() {}
         });
+
         monaco.languages.registerCompletionItemProvider('javascript', {
-            triggerCharacters: [' '],
+            triggerCharacters: [' ', '"', "'", '/'], 
             provideCompletionItems: async (model, position) => {
                 const lineText = model.getLineContent(position.lineNumber);
-                const textUntilPos = lineText.slice(0, position.column - 1);
+                const textUntilPos = lineText.slice(0, position.column);
 
-                const fnMatch = textUntilPos.match(/import\s+([\w$]+)\s+from\s*$/);
+                const fnMatch = textUntilPos.match(/import\s+([\w$]+)\s+from\s*['"]?$/);
+
                 if (!fnMatch) {
-                    return {
-                        suggestions: []
-                    };
+                    return { suggestions: [] };
                 }
 
                 const symbolName = fnMatch[1];
-                const matches = await editor.FindFilesExporting(symbolName);
+                let matches = await editor.FindFilesExporting(symbolName);
+                let isFallback = false;
+
                 if (!matches || matches.length === 0) {
-                    return {
-                        suggestions: []
-                    };
+                    isFallback = true;
+                    if (editor.script && editor.script.files) {
+                        matches = Object.keys(editor.script.files);
+                    } else {
+                        matches = [];
+                    }
+                    
+                    if (editor.currentPath) {
+                        matches = matches.filter(p => p !== editor.currentPath);
+                    }
                 }
 
                 const suggestions = matches.map(path => {
                     const rel = editor.getRelativeImportPath(path);
+                    
+                    const hasOpenQuote = /['"]$/.test(textUntilPos);
+                    const insertText = hasOpenQuote ? rel : `"${rel}"`;
+
                     return {
                         label: rel,
-                        kind: monaco.languages.CompletionItemKind.Module,
-                        insertText: `"${rel}"`,
-                        detail: `${symbolName} → ${path}`
+                        kind: monaco.languages.CompletionItemKind.File,
+                        insertText: insertText,
+                        detail: isFallback ? `File: ${path}` : `Export: ${symbolName}`,
+                        sortText: isFallback ? '9999' : '0000' 
                     };
                 });
 
-                return {
-                    suggestions
-                };
+                return { suggestions };
             }
         });
     }
@@ -2078,7 +2091,7 @@ class ScriptFlowEditor {
         return matches;
     }
 
-    async GetFileExportsSummary(path) {
+     async GetFileExportsSummary(path) {
         let code = null;
 
         if (this.mode === 'multi-file-edit' && this.script?.files?.[path]) {
@@ -2129,7 +2142,6 @@ class ScriptFlowEditor {
                 const parts = m[1].split(',');
                 for (const part of parts) {
                     const p = part.trim();
-                    // "name as alias" or just "name"
                     const asMatch = p.match(/^([A-Za-z0-9_]+)\s+as\s+([A-Za-z0-9_]+)/);
                     if (asMatch) {
                         exports.add(`named: ${asMatch[2]} (from ${asMatch[1]})`);
@@ -2141,7 +2153,7 @@ class ScriptFlowEditor {
                     }
                 }
             }
-            // export * from './foo'
+            // export * from './Blah'
             else if ((m = line.match(/^export\s+\*\s+from\s+['"]([^'"]+)['"]/))) {
                 exports.add(`re-export * from: ${m[1]}`);
             }
@@ -2163,7 +2175,6 @@ class ScriptFlowEditor {
                 }
             }
             // export default Blah;
-            // where blah = new BlahBlah()
             else if ((m = line.match(/^export\s+default\s+([A-Za-z0-9_]+)/))) {
                 const exportedVar = m[1];
                 exports.add(`default: ${exportedVar}`);
@@ -2177,6 +2188,29 @@ class ScriptFlowEditor {
                     const className = ctorMatch[2];
                     exports.add(`default instance of: ${className}`);
                 }
+            }
+            // module.exports = Blah
+            else if ((m = line.match(/^module\.exports\s*=\s*/))) {
+                if (line.match(/function/)) {
+                    const nameM = line.match(/function\s+([A-Za-z0-9_$]+)/);
+                    exports.add(nameM ? `commonjs default function: ${nameM[1]}` : `commonjs default function: (anonymous)`);
+                } else if (line.match(/class/)) {
+                    const nameM = line.match(/class\s+([A-Za-z0-9_$]+)/);
+                    exports.add(nameM ? `commonjs default class: ${nameM[1]}` : `commonjs default class: (anonymous)`);
+                } else if (line.match(/\{/)) {
+                    exports.add(`commonjs default object`);
+                } else {
+                    const idM = line.match(/^module\.exports\s*=\s*([A-Za-z0-9_$]+)/);
+                    exports.add(idM ? `commonjs default: ${idM[1]}` : `commonjs default export`);
+                }
+            }
+            // module.exports.name = Blah
+            else if ((m = line.match(/^module\.exports\.([A-Za-z0-9_$]+)\s*=/))) {
+                exports.add(`commonjs named: ${m[1]}`);
+            }
+            // exports.name = Blah
+            else if ((m = line.match(/^exports\.([A-Za-z0-9_$]+)\s*=/))) {
+                exports.add(`commonjs named: ${m[1]}`);
             }
         }
 
