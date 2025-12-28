@@ -6711,13 +6711,6 @@ ${JSON.stringify(meta, null, 2)}
                 this.pull();
             }
         });
-        document.getElementById('gitPushBtn').addEventListener('click', () => {
-            if (this.mode === 'multi-file-edit') {
-                this.pushMultiFile();
-            } else {
-                this.push();
-            }
-        });
         document.getElementById('pullMultiFileBtn')?.addEventListener('click', () => this.pullMultiFile());
         document.getElementById('pushMultiFileBtn')?.addEventListener('click', () => this.pushMultiFile());
         document.getElementById('configureGithubBtn')?.addEventListener('click', () => {
