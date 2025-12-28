@@ -964,7 +964,8 @@ class ScriptFlowEditor {
                             force: true
                         });
                     } catch (fetchErr) {
-                        console.warn('syncWorkspaceToGit: Fetch/checkout error:', fetchErr);
+						// not needed since the only error i can think off is "Could not find (branch name)"
+                        //console.warn('syncWorkspaceToGit: Fetch/checkout error:', fetchErr);
                     }
                 }
             } else if (!hasGit) {
@@ -1805,7 +1806,7 @@ class ScriptFlowEditor {
     }
 
     CollectDefinedIdentifiers(model) {
-		// this was chatgpted cuz im lazy to redo the regex
+        // this was chatgpted cuz im lazy to redo the regex
         const text = model.getValue();
         const ids = new Set();
         let m;
@@ -4464,14 +4465,11 @@ class ScriptFlowEditor {
                 );
                 this.editor.setModel(initialModel);
 
-                this.editor.addCommand(
-                    monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+                this.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
                     () => this.save()
                 );
 
-                this.editor.addCommand(
-                    monaco.KeyCode.Tab,
-                    () => {
+                this.editor.addCommand(monaco.KeyCode.Tab, () => {
                         const model = this.editor.getModel();
                         const pos = this.editor.getPosition();
                         if (!model || !pos) {
@@ -4491,7 +4489,6 @@ class ScriptFlowEditor {
                         }
 
                         const decorations = model.getDecorationsInRange(range).filter(d => d.options.description === 'TypoFix');
-
                         if (decorations.length === 0) {
                             this.editor.trigger('keyboard', 'tab', {});
                             return;
@@ -4511,7 +4508,8 @@ class ScriptFlowEditor {
                         } else {
                             this.editor.trigger('keyboard', 'tab', {});
                         }
-                    }
+                    },
+                    '!suggestWidgetVisible'
                 );
 
                 this.editor.addCommand(
