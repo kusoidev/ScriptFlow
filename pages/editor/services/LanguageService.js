@@ -5,12 +5,10 @@ export function SetupSmartImports(editor) {
             const lineText = model.getLineContent(position.lineNumber);
             const textUntilPos = lineText.slice(0, position.column);
 
-
             const fnMatch = textUntilPos.match(/import\s+(?:\{([^}]+?)\s*\}|\s*([\w$]+))\s+from\s*$/i);
             if (!fnMatch) return {
                 items: []
             };
-
 
             let symbolName;
             if (fnMatch[1]) {
@@ -21,19 +19,15 @@ export function SetupSmartImports(editor) {
             }
             const matches = await FindFilesExporting(symbolName, editor);
 
-
             if (!matches || matches.length === 0) return {
                 items: []
             };
 
-
             const chosenPath = matches[0];
             const rel = getRelativeImportPath(editor, chosenPath);
 
-
             const hasQuote = /['"]$/.test(textUntilPos);
             const insertText = hasQuote ? rel + '"' : `"${rel}"`;
-
 
             return {
                 items: [{
@@ -50,23 +44,19 @@ export function SetupSmartImports(editor) {
         freeInlineCompletions() {}
     });
 
-
     monaco.languages.registerCompletionItemProvider('javascript', {
         triggerCharacters: [' ', '"', "'", '/'],
         provideCompletionItems: async (model, position) => {
             const lineText = model.getLineContent(position.lineNumber);
             const textUntilPos = lineText.slice(0, position.column);
 
-
             const fnMatch = textUntilPos.match(/import\s+(?:\{([^}]+?)\s*\}|([\w$]+))\s+from\s*['"]?$/i);
-
 
             if (!fnMatch) {
                 return {
                     suggestions: []
                 };
             }
-
 
             let symbolName;
             if (fnMatch[1]) {
@@ -78,7 +68,6 @@ export function SetupSmartImports(editor) {
             let matches = await FindFilesExporting(symbolName, editor);
             let isFallback = false;
 
-
             if (!matches || matches.length === 0) {
                 isFallback = true;
                 if (editor.script && editor.script.files) {
@@ -87,20 +76,16 @@ export function SetupSmartImports(editor) {
                     matches = [];
                 }
 
-
                 if (editor.currentPath) {
                     matches = matches.filter(p => p !== editor.currentPath);
                 }
             }
 
-
             const suggestions = matches.map(path => {
                 const rel = getRelativeImportPath(editor, path);
 
-
                 const hasOpenQuote = /['"]$/.test(textUntilPos);
                 const insertText = hasOpenQuote ? rel : `"${rel}"`;
-
 
                 return {
                     label: rel,
@@ -111,7 +96,6 @@ export function SetupSmartImports(editor) {
                 };
             });
 
-
             return {
                 suggestions
             };
@@ -119,33 +103,26 @@ export function SetupSmartImports(editor) {
     });
 }
 
-
 function getRelativeImportPath(editor, targetPath) {
     if (!editor.currentPath) return './' + targetPath;
 
-
     const fromParts = editor.currentPath.split('/').slice(0, -1); // dir of current file
     const toParts = targetPath.split('/');
-
 
     let i = 0;
     while (i < fromParts.length && i < toParts.length && fromParts[i] === toParts[i]) {
         i++;
     }
 
-
     const up = fromParts.length - i;
     const down = toParts.slice(i).join('/');
-
 
     const prefix = up > 0 ? '../'.repeat(up) : './';
     return prefix + down;
 }
 
-
 export function getProjectFileList(editor) {
     const files = [];
-
 
     if (editor.mode === 'multi-file-edit' && editor.script?.files) {
         for (const path of Object.keys(editor.script.files)) {
@@ -162,24 +139,19 @@ export function getProjectFileList(editor) {
         });
     }
 
-
     return files;
 }
-
 
 async function FindFilesExporting(name, editor) {
     const files = getProjectFileList(editor);
     const matches = [];
 
-
     const needle = new RegExp(`\\b${name}\\b`);
-
 
     for (const filePath of files) {
         try {
             const summary = await GetFileExportsSummary(filePath, editor);
             if (!summary || summary === '_No exports detected in this file._') continue;
-
 
             if (needle.test(summary)) {
                 matches.push(filePath);
@@ -189,14 +161,11 @@ async function FindFilesExporting(name, editor) {
         }
     }
 
-
     return matches;
 }
 
-
 export async function GetFileExportsSummary(path, editor) {
     let code = null;
-
 
     if (editor.mode === 'multi-file-edit' && editor.script?.files?.[path]) {
         code = editor.script.files[path];
@@ -204,18 +173,14 @@ export async function GetFileExportsSummary(path, editor) {
         code = await editor.getFile(path);
     }
 
-
     if (!code || typeof code !== 'string') return null;
-
 
     const lines = code.split('\n');
     const exports = new Set();
 
-
     for (const rawLine of lines) {
         const line = rawLine.trim();
         let m;
-
 
         // export default class Blah { ... }
         if ((m = line.match(/^export\s+default\s+class\s+([A-Za-z0-9_]+)/))) {
@@ -287,11 +252,9 @@ export async function GetFileExportsSummary(path, editor) {
             const exportedVar = m[1];
             exports.add(`default: ${exportedVar}`);
 
-
             const ctorRegex = new RegExp(
                 `\\b(const|let|var)\\s+${exportedVar}\\s*=\\s*new\\s+([A-Za-z0-9_]+)`
             );
-
 
             const ctorMatch = code.match(ctorRegex);
             if (ctorMatch) {
@@ -324,15 +287,12 @@ export async function GetFileExportsSummary(path, editor) {
         }
     }
 
-
     if (exports.size === 0) {
         return '_No exports detected in this file._';
     }
 
-
     return Array.from(exports).slice(0, 20).map(e => `- ${e}`).join('\n');
 }
-
 
 export function CollectDefinedIdentifiers(model) {
     // this was chatgpted cuz im lazy to redo the regex
@@ -340,10 +300,8 @@ export function CollectDefinedIdentifiers(model) {
     const ids = new Set();
     let m;
 
-
     const importDefault = /\bimport\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\b/g;
     while ((m = importDefault.exec(text)) !== null) ids.add(m[1]);
-
 
     const importNamed = /\bimport\s*{([^}]+)}\s*from\b/g;
     while ((m = importNamed.exec(text)) !== null) {
@@ -354,26 +312,20 @@ export function CollectDefinedIdentifiers(model) {
         }
     }
 
-
     const varLike = /\b(var|let|const)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
     while ((m = varLike.exec(text)) !== null) ids.add(m[2]);
-
 
     const funcDecl = /\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g;
     while ((m = funcDecl.exec(text)) !== null) ids.add(m[1]);
 
-
     const classDecl = /\bclass\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/g;
     while ((m = classDecl.exec(text)) !== null) ids.add(m[1]);
-
 
     const arrowFunc = /\b([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*\([^)]*\)\s*=>/g;
     while ((m = arrowFunc.exec(text)) !== null) ids.add(m[1]);
 
-
     return Array.from(ids);
 }
-
 
 function Levenshtein(a, b) {
     const la = a.length,
@@ -396,7 +348,6 @@ function Levenshtein(a, b) {
     return dp[la][lb];
 }
 
-
 export function FindClosestIdentifier(name, candidates, maxDistance = 3) {
     let best = null;
     let bestDist = Infinity;
@@ -411,7 +362,6 @@ export function FindClosestIdentifier(name, candidates, maxDistance = 3) {
     return best && bestDist <= maxDistance ? best : null;
 }
 
-
 export function SetupTypoCorrection(editor) {
     monaco.languages.registerCompletionItemProvider('javascript', {
         triggerCharacters: [
@@ -422,12 +372,10 @@ export function SetupTypoCorrection(editor) {
             'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'
         ],
 
-
         provideCompletionItems: (model, position) => {
             const wordUntil = model.getWordUntilPosition(position);
             const fullWord = model.getWordAtPosition(position) || wordUntil;
             const name = fullWord && fullWord.word;
-
 
             if (!name || name.length < 3) {
                 return {
@@ -435,16 +383,13 @@ export function SetupTypoCorrection(editor) {
                 };
             }
 
-
             const definedIds = CollectDefinedIdentifiers(model);
-
 
             if (definedIds.includes(name)) {
                 return {
                     suggestions: []
                 };
             }
-
 
             const closest = FindClosestIdentifier(name, definedIds);
             if (!closest || closest === name) {
@@ -453,14 +398,12 @@ export function SetupTypoCorrection(editor) {
                 };
             }
 
-
             const range = new monaco.Range(
                 position.lineNumber,
                 fullWord.startColumn,
                 position.lineNumber,
                 fullWord.endColumn
             );
-
 
             editor.typoDecorationIds = model.deltaDecorations(editor.typoDecorationIds || [], [{
                 range,
@@ -472,7 +415,6 @@ export function SetupTypoCorrection(editor) {
                     description: 'TypoFix'
                 }
             }]);
-
 
             return {
                 suggestions: [{
@@ -488,23 +430,18 @@ export function SetupTypoCorrection(editor) {
     });
 }
 
-
 export function RunTypoAnalysis(editor) {
     if (!editor.editor) return;
     const model = editor.editor.getModel();
     if (!model) return;
 
-
     editor.typoDecorationIds = model.deltaDecorations(editor.typoDecorationIds || [], []);
-
 
     const pos = editor.editor.getPosition();
     if (!pos) return;
 
-
     const wordInfo = model.getWordAtPosition(pos);
     if (!wordInfo || !wordInfo.word || wordInfo.word.length < 3) return;
-
 
     const name = wordInfo.word;
     const range = new monaco.Range(
@@ -514,16 +451,12 @@ export function RunTypoAnalysis(editor) {
         wordInfo.endColumn
     );
 
-
     const definedIds = CollectDefinedIdentifiers(model);
-
 
     if (definedIds.includes(name)) return;
 
-
     const closest = FindClosestIdentifier(name, definedIds);
     if (!closest || closest === name) return;
-
 
     editor.typoDecorationIds = model.deltaDecorations(editor.typoDecorationIds || [], [{
         range,

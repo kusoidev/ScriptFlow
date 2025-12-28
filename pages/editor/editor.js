@@ -7,6 +7,7 @@ import {
     CollectDefinedIdentifiers,
     GetFileExportsSummary
 } from "./services/LanguageService.js";
+
 // src: https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API
 // just a simple wrapper for indexeddb makes it easier to use with promises
 class IDBHelper {
@@ -1939,6 +1940,54 @@ class ScriptFlowEditor {
             }
         });
 
+        monaco.languages.registerCompletionItemProvider('javascript', {
+            triggerCharacters: [' ', '\n'],
+            provideCompletionItems: (model, position) => {
+                const line = model.getLineContent(position.lineNumber);
+                if (line.trim().startsWith('/**')) {
+                    let funcLine = position.lineNumber + 1;
+                    let funcText = '';
+                    while (funcLine <= model.getLineCount()) {
+                        funcText = model.getLineContent(funcLine);
+                        if (funcText.includes('function ') || funcText.includes('(')) break;
+                        funcLine++;
+                    }
+
+                    const paramMatch = funcText.match(/\((\w+(?:\s*,\s*\w+)*)\)/);
+                    const params = paramMatch ? paramMatch[1].split(',').map(p => p.trim()) : ['param'];
+
+                    const paramTags = params.map(param => ` * @param {any} ${param} - Description`).join('\n');
+                    const jsdocSnippet = [
+                        ' ${1:Function description.}',
+                        ' *',
+                        paramTags,
+                        ' * @returns {any} ${2:Return description.}',
+                        ''
+                    ].join('\n');
+
+                    const snippet = jsdocSnippet;
+
+                    return {
+                        suggestions: [{
+                            label: 'Generate JSDoc',
+                            kind: monaco.languages.CompletionItemKind.Snippet,
+                            insertText: snippet,
+                            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                            range: {
+                                startLineNumber: position.lineNumber,
+                                startColumn: 4,
+                                endLineNumber: position.lineNumber,
+                                endColumn: position.column
+                            }
+                        }]
+                    };
+                }
+                return {
+                    suggestions: []
+                };
+            }
+        });
+
         monaco.languages.registerHoverProvider('javascript', {
             provideHover: async (model, position) => {
                 const wordInfo = model.getWordAtPosition(position);
@@ -3715,7 +3764,7 @@ class ScriptFlowEditor {
                 monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
                     noSemanticValidation: false,
                     noSyntaxValidation: false,
-                    noSuggestionDiagnostics: true,
+                    noSuggestionDiagnostics: false,
                     diagnosticCodesToIgnore: [
                         1375,
                         2339,
@@ -3725,12 +3774,10 @@ class ScriptFlowEditor {
 
                 monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
                     target: monaco.languages.typescript.ScriptTarget.ESNext,
-                    allowNonTsExtensions: false,
+                    allowNonTsExtensions: true,
                     checkJs: false,
                     allowJs: true,
-                    noImplicitAny: true,
-                    strict: true,
-                    noUnusedLocals: true,
+                    noUnusedLocals: false,
                     noUnusedParameters: false,
                     noImplicitReturns: false,
                     noFallthroughCasesInSwitch: false,
@@ -4004,7 +4051,9 @@ class ScriptFlowEditor {
                     },
                     lightbulb: {
                         enabled: 'on'
-                    }
+                    },
+                    "suggest.completeJSDocs": true,
+                    "languageDefinedFixed": true
                 });
 
                 const initialModel = monaco.editor.createModel(
