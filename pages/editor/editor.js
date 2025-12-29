@@ -1944,7 +1944,9 @@ class ScriptFlowEditor {
             triggerCharacters: [' ', '\n'],
             provideCompletionItems: (model, position) => {
                 const line = model.getLineContent(position.lineNumber);
-                if (line.trim().startsWith('/**')) {
+                const trimmedLine = line.trim();
+
+                if (trimmedLine.startsWith('/**')) {
                     let funcLine = position.lineNumber + 1;
                     let funcText = '';
                     while (funcLine <= model.getLineCount()) {
@@ -1965,17 +1967,17 @@ class ScriptFlowEditor {
                         ''
                     ].join('\n');
 
-                    const snippet = jsdocSnippet;
+                    const startColumn = line.indexOf('/**') + 4;
 
                     return {
                         suggestions: [{
                             label: 'Generate JSDoc',
                             kind: monaco.languages.CompletionItemKind.Snippet,
-                            insertText: snippet,
+                            insertText: jsdocSnippet,
                             insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
                             range: {
                                 startLineNumber: position.lineNumber,
-                                startColumn: 4,
+                                startColumn: startColumn,
                                 endLineNumber: position.lineNumber,
                                 endColumn: position.column
                             }
