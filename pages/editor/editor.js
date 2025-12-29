@@ -1,12 +1,4 @@
-import {
-    RunTypoAnalysis,
-    SetupSmartImports,
-    SetupTypoCorrection,
-    getProjectFileList,
-    FindClosestIdentifier,
-    CollectDefinedIdentifiers,
-    GetFileExportsSummary
-} from "./services/LanguageService.js";
+import { RunTypoAnalysis, SetupSmartImports, SetupTypoCorrection, getProjectFileList, FindClosestIdentifier, CollectDefinedIdentifiers, GetFileExportsSummary } from "./services/LanguageService.js";
 
 // src: https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API
 // just a simple wrapper for indexeddb makes it easier to use with promises
@@ -1955,16 +1947,17 @@ class ScriptFlowEditor {
                         funcLine++;
                     }
 
-                    const paramMatch = funcText.match(/\((\w+(?:\s*,\s*\w+)*)\)/);
+                    const paramMatch = funcText.match(/\(([^)]+)\)/);
                     const params = paramMatch ? paramMatch[1].split(',').map(p => p.trim()) : ['param'];
 
                     const paramTags = params.map(param => ` * @param {any} ${param} - Description`).join('\n');
                     const jsdocSnippet = [
-                        ' ${1:Function description.}',
+                        '',
+                        ' * ${1:Function description.}', 
                         ' *',
                         paramTags,
-                        ' * @returns {any} ${2:Return description.}',
-                        ''
+                        ' * @returns {any} ${2:Return description.}', 
+                        ' *'
                     ].join('\n');
 
                     const startColumn = line.indexOf('/**') + 4;
@@ -3623,11 +3616,9 @@ class ScriptFlowEditor {
             loading.add(normalizedPath);
             visited.add(normalizedPath);
 
-            console.log(`[Preview] Loading module: ${normalizedPath}`);
             const code = await this.getFile(normalizedPath, false);
 
             if (!code) {
-                console.warn(`[Preview] Module not found: ${normalizedPath}`);
                 loading.delete(normalizedPath);
                 return;
             }
@@ -3645,7 +3636,6 @@ class ScriptFlowEditor {
                 imports.push(match[1]);
             }
 
-            console.log(`[Preview] Found ${imports.length} imports in ${normalizedPath}`);
 
             for (const importPath of imports) {
                 const resolved = resolvePathFn(importPath);
@@ -3661,11 +3651,16 @@ class ScriptFlowEditor {
         const startPath = path.endsWith('.js') ? path : path + '.js';
         await load(startPath);
 
-        console.log(`[Preview] Loaded ${modules.length} modules total`);
         return modules;
     }
-
-    // a helper to get a file from either git fs or the local workspace
+    
+    /**
+     * A Helper to get files from Git FS or Local WorkSpace.
+     *
+     * @param {string} path - Relative path to the file (e.g., 'src/main.js').
+     * @param {boolean} [binary=false] - Whether to read as binary data.
+     * @returns {string|ArrayBuffer|null} File content or null if not found.
+     */
     async getFile(path, binary = false) {
         if (this.mode === 'git') {
             const fullPath = `${this.gitDir}/${path}`;
@@ -3702,6 +3697,12 @@ class ScriptFlowEditor {
         return null;
     }
 
+    /**
+     * Get the MIME type from a filename.
+     * 
+     * @param {string} filename - File name to check.
+     * @returns {string} The matching MIME type or 'application/octet-stream' if unknown.
+     */
     getMimeType(filename) {
         const ext = filename.split('.').pop().toLowerCase();
         const types = {
@@ -3731,8 +3732,11 @@ class ScriptFlowEditor {
         return window.btoa(binary);
     }
 
-    // src: https://microsoft.github.io/monaco-editor/
-    // initializes the monaco editor with all the settings
+    /**
+     * Initializes the monaco editor with all the settings
+     *
+     * @src: https://microsoft.github.io/monaco-editor/
+     */
     initEditor() {
         return new Promise((resolve) => {
             window.MonacoEnvironment = {
@@ -4041,6 +4045,23 @@ class ScriptFlowEditor {
                     glyphMargin: true,
                     minimap: {
                         enabled: true
+                    },
+                    smoothScrolling: true,
+                    cursorSmoothCaretAnimation: "on",
+                    scrollBeyondLastLine: false,
+                    mouseWheelScrollSensitivity: 1,
+                    fastScrollSensitivity: 5,
+                    scrollbar: {
+                      useShadows: false,
+                      verticalHasArrows: false,
+                      horizontalHasArrows: false,
+                      vertical: 'visible',
+                      horizontal: 'visible',
+                      verticalScrollbarSize: 12,
+                      horizontalScrollbarSize: 12,
+                      arrowSize: 30,
+                      handleMouseWheel: true,
+                      alwaysConsumeMouseWheel: false
                     },
                     automaticLayout: true,
                     inlineSuggest: {

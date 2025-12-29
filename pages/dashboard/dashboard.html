@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>ScriptFlow Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="dashboard.css" />
+</head>
+
+<body>
+    <div class="header">
+        <div class="header-left">
+            <h1>ScriptFlow Dashboard</h1>
+            <p>Manage and monitor all your scripts</p>
+        </div>
+        <div class="header-stats">
+            <span class="header-stat"><span id="totalScripts">0</span> total</span>
+            <span class="header-stat-divider">•</span>
+            <span class="header-stat enabled"><span id="enabledScripts">0</span> enabled</span>
+            <span class="header-stat-divider">•</span>
+            <span class="header-stat disabled"><span id="disabledScripts">0</span> disabled</span>
+            <span class="header-stat-divider">•</span>
+            <span class="header-stat"><span id="totalTime">0h</span> spent</span>
+        </div>
+        <div class="header-actions">
+            <button id="refreshBtn" class="btn btn-secondary btn-with-icon" title="Refresh Scripts">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <polyline points="1 20 1 14 7 14"></polyline>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                </svg>
+                <span>Refresh</span>
+            </button>
+            <button id="newScriptBtn" class="btn btn-primary btn-with-icon" title="Create New Script">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                </svg>
+                <span>New Script</span>
+            </button>
+            <button id="customizeBtn" class="view-toggle-btn" title="Customize Background">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="13.5" cy="6.5" r=".5"></circle>
+                    <circle cx="17.5" cy="10.5" r=".5"></circle>
+                    <circle cx="8.5" cy="7.5" r=".5"></circle>
+                    <circle cx="6.5" cy="12.5" r=".5"></circle>
+                    <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"></path>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <div class="dashboard-container">
+        <div class="filter-bar">
+            <div class="search-container">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="searchInput" placeholder="Search scripts..." class="search-input">
+            </div>
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-filter="all">All</button>
+                <button class="filter-btn" data-filter="enabled">Enabled</button>
+                <button class="filter-btn" data-filter="disabled">Disabled</button>
+                <button class="filter-btn" data-filter="single">Single File</button>
+                <button class="filter-btn" data-filter="project">Projects</button>
+            </div>
+            <div class="sort-container">
+                <label for="sortSelect">Sort by:</label>
+                <select id="sortSelect" class="sort-select">
+                    <option value="status">Status (Enabled First)</option>
+                    <option value="name">Name</option>
+                    <option value="modified">Last Modified</option>
+                    <option value="time">Time Spent</option>
+                    <option value="created">Date Created</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="scripts-section">
+            <div class="section-header">
+                <h2>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                        <polyline points="13 2 13 9 20 9"></polyline>
+                    </svg>
+                    Your Scripts
+                </h2>
+                <span class="script-count" id="visibleCount">0 scripts</span>
+            </div>
+            <div id="scriptsGrid" class="scripts-grid">
+            </div>
+            <div id="emptyState" class="empty-state" style="display: none;">
+                <div class="empty-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path>
+                        <polyline points="13 2 13 9 20 9"></polyline>
+                    </svg>
+                </div>
+                <h3>No scripts found</h3>
+                <p>Create your first script using the "New Script" button above</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="customizeModal" class="modal-overlay">
+        <div class="modal-content settings-modal-content">
+            <div class="modal-header">
+                <h2>🎨 Background Customization</h2>
+                <button id="customizeModalCloseBtn" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-section-title">Background Image</div>
+                <div class="settings-group">
+                    <label>Upload Image</label>
+                    <div class="file-upload-area" id="uploadArea">
+                        <div class="upload-icon">📁</div>
+                        <div class="upload-text">Click to upload or drag & drop</div>
+                        <div class="upload-hint">PNG, JPG, GIF up to 10MB</div>
+                    </div>
+                    <input type="file" id="hiddenFileInput" accept="image/*" style="display: none;">
+                    <div id="imagePreview" class="image-preview" style="display: none;">
+                        <img id="previewImg" src="" alt="Preview">
+                    </div>
+                </div>
+
+                <div class="settings-section-title">Background Settings</div>
+                <div class="settings-group">
+                    <label for="opacitySlider">Opacity: <span id="opacityValue">30%</span></label>
+                    <input type="range" class="settings-slider" id="opacitySlider" min="0" max="100" value="30">
+                </div>
+
+                <div class="settings-group">
+                    <label for="blurSlider">Blur: <span id="blurValue">0px</span></label>
+                    <input type="range" class="settings-slider" id="blurSlider" min="0" max="20" value="0">
+                </div>
+
+                <div class="settings-group">
+                    <label for="bgSizeSelect">Background Size</label>
+                    <select class="settings-input" id="bgSizeSelect">
+                        <option value="cover">Cover (Fill entire screen)</option>
+                        <option value="contain">Contain (Fit within screen)</option>
+                        <option value="auto">Auto (Original size)</option>
+                        <option value="100% 100%">Stretch (Fill and stretch)</option>
+                    </select>
+                </div>
+
+                <div class="settings-group">
+                    <label for="bgPositionSelect">Background Position</label>
+                    <select class="settings-input" id="bgPositionSelect">
+                        <option value="center">Center</option>
+                        <option value="top">Top</option>
+                        <option value="bottom">Bottom</option>
+                        <option value="left">Left</option>
+                        <option value="right">Right</option>
+                        <option value="top left">Top Left</option>
+                        <option value="top right">Top Right</option>
+                        <option value="bottom left">Bottom Left</option>
+                        <option value="bottom right">Bottom Right</option>
+                    </select>
+                </div>
+
+                <div class="settings-group settings-checkbox">
+                    <input type="checkbox" id="enableBgCheckbox" checked>
+                    <label for="enableBgCheckbox">Enable custom background</label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="notificationContainer"></div>
+
+    <script src="dashboard.js"></script>
+</body>
+
+</html>

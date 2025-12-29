@@ -94,6 +94,12 @@ class ScriptFlowPopup {
         });
     }
 
+    openDashboard() {
+        chrome.tabs.create({
+            url: chrome.runtime.getURL('pages/dashboard/dashboard.html')
+        });
+    }
+
     setupEventListeners() {
         document.querySelectorAll('.tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
@@ -108,6 +114,13 @@ class ScriptFlowPopup {
         if (workspaceBtn) {
             workspaceBtn.addEventListener('click', () => {
                 this.openWorkspace();
+            });
+        }
+
+        const dashboardBtnAlt = document.getElementById('openDashboardBtnAlt');
+        if (dashboardBtnAlt) {
+            dashboardBtnAlt.addEventListener('click', () => {
+                this.openDashboard();
             });
         }
 

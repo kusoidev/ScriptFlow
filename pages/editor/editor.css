@@ -285,6 +285,20 @@ body {
 	pointer-events: none;
 }
 
+#codeEditorContainer,
+#codeEditorContainer .monaco-editor .overflow-guard,
+#codeEditorContainer .monaco-editor .monaco-scrollable-element {
+    scroll-behavior: smooth !important;
+}
+
+.monaco-editor .view-lines {
+    scroll-behavior: smooth !important;
+}
+
+* {
+    scroll-behavior: smooth;
+}
+
 #customBackgroundLayer.active {
 	opacity: 1;
 }
