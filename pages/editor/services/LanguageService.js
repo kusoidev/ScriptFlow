@@ -1,43 +1,78 @@
 // services/LanguageService.js
+import {
+    ImportParser,
+    ExportParser,
+    JSTokenizer
+} from "./Tokenizer.js"
+/**
+ * Sets up Monaco Editor smart import completions using tokenizer-based parsing.
+ * Provides inline completions (top-1) and regular completions (list) for import paths.
+ * @param {Object} editor - Monaco editor instance with script/files context
+ */
 export function SetupSmartImports(editor) {
+    const isImportPathCompleteOrInside = (textUntilPos, positionColumn) => {
+        const trimmed = textUntilPos.trim();
+
+        if (/['"].*['"]$/.test(trimmed) || trimmed.endsWith(';')) {
+            return true;
+        }
+
+        const lastQuoteIndex = Math.max(
+            textUntilPos.lastIndexOf('"'),
+            textUntilPos.lastIndexOf("'")
+        );
+        if (lastQuoteIndex >= 0 && positionColumn > lastQuoteIndex + 1) {
+            return true;
+        }
+
+        return false;
+    };
+
     monaco.languages.registerInlineCompletionsProvider('javascript', {
         async provideInlineCompletions(model, position, context, token) {
             const lineText = model.getLineContent(position.lineNumber);
             const textUntilPos = lineText.slice(0, position.column);
 
-            const fnMatch = textUntilPos.match(/import\s+(?:\{([^}]+?)\s*\}|\s*([\w$]+))\s+from\s*$/i);
-            if (!fnMatch) return {
+            if (isImportPathCompleteOrInside(textUntilPos, position.column)) {
+                return {
+                    items: []
+                };
+            }
+
+            const parser = new ImportParser(textUntilPos);
+            if (!parser.IsAfterFromOnly()) return {
                 items: []
             };
 
-            let symbolName;
-            if (fnMatch[1]) {
-                const firstName = fnMatch[1].trim().split(/\s*,\s*/)[0];
-                symbolName = firstName.split(/\s+as\s+/i)[0].trim();
-            } else if (fnMatch[2]) {
-                symbolName = fnMatch[2].trim();
-            }
-            const matches = await FindFilesExporting(symbolName, editor);
+            const symbolName = parser.ParseSymbolName();
+            if (!symbolName) return {
+                items: []
+            };
 
-            if (!matches || matches.length === 0) return {
+            const matches = await FindFilesExporting(symbolName, editor);
+            if (!matches?.length) return {
                 items: []
             };
 
             const chosenPath = matches[0];
             const rel = getRelativeImportPath(editor, chosenPath);
 
-            const hasQuote = /['"]$/.test(textUntilPos);
-            const insertText = hasQuote ? rel + '"' : `"${rel}"`;
+            const hasOpenQuote = /['"]$/.test(textUntilPos);
+            const ghostText = hasOpenQuote ? `"${rel}"` : `"${rel}"`;
 
             return {
                 items: [{
-                    insertText: insertText,
-                    range: new monaco.Range(
-                        position.lineNumber,
-                        position.column,
-                        position.lineNumber,
-                        position.column
-                    )
+                    insertText: ghostText,
+                    range: {
+                        startLineNumber: position.lineNumber,
+                        startColumn: position.column,
+                        endLineNumber: position.lineNumber,
+                        endColumn: position.column
+                    },
+                    command: {
+                        id: 'acceptGhostText',
+                        title: 'Accept import path'
+                    }
                 }]
             };
         },
@@ -50,32 +85,28 @@ export function SetupSmartImports(editor) {
             const lineText = model.getLineContent(position.lineNumber);
             const textUntilPos = lineText.slice(0, position.column);
 
-            const fnMatch = textUntilPos.match(/import\s+(?:\{([^}]+?)\s*\}|([\w$]+))\s+from\s*['"]?$/i);
-
-            if (!fnMatch) {
+            if (isImportPathCompleteOrInside(textUntilPos, position.column)) {
                 return {
                     suggestions: []
                 };
             }
 
-            let symbolName;
-            if (fnMatch[1]) {
-                const firstName = fnMatch[1].trim().split(/\s*,\s*/)[0];
-                symbolName = firstName.split(/\s+as\s+/i)[0].trim();
-            } else if (fnMatch[2]) {
-                symbolName = fnMatch[2].trim();
-            }
+            const parser = new ImportParser(textUntilPos);
+            if (!parser.IsAfterFromOnly()) return {
+                suggestions: []
+            };
+
+            const symbolName = parser.ParseSymbolName();
+            if (!symbolName) return {
+                suggestions: []
+            };
+
             let matches = await FindFilesExporting(symbolName, editor);
             let isFallback = false;
 
-            if (!matches || matches.length === 0) {
+            if (!matches?.length) {
                 isFallback = true;
-                if (editor.script && editor.script.files) {
-                    matches = Object.keys(editor.script.files);
-                } else {
-                    matches = [];
-                }
-
+                matches = editor.script?.files ? Object.keys(editor.script.files) : [];
                 if (editor.currentPath) {
                     matches = matches.filter(p => p !== editor.currentPath);
                 }
@@ -83,16 +114,34 @@ export function SetupSmartImports(editor) {
 
             const suggestions = matches.map(path => {
                 const rel = getRelativeImportPath(editor, path);
-
                 const hasOpenQuote = /['"]$/.test(textUntilPos);
                 const insertText = hasOpenQuote ? rel : `"${rel}"`;
+
+                let exportInfo = '';
+                if (!isFallback && editor.script?.files?.[path]) {
+                    const fileContent = editor.script.files[path];
+                    const exportParser = new ExportParser(fileContent);
+                    const exports = exportParser.ParseAllExports();
+                    const matchingExport = exports.find(exp => exp.name === symbolName);
+                    if (matchingExport) {
+                        exportInfo = `${matchingExport.kind}: ${matchingExport.type}`;
+                        if (matchingExport.params) exportInfo += `(${matchingExport.params})`;
+                    }
+                }
 
                 return {
                     label: rel,
                     kind: monaco.languages.CompletionItemKind.File,
                     insertText: insertText,
-                    detail: isFallback ? `File: ${path}` : `Export: ${symbolName}`,
-                    sortText: isFallback ? '9999' : '0000'
+                    detail: isFallback ? `File: ${path}` : `Export: ${symbolName} ${exportInfo}`,
+                    documentation: exportInfo ? `Type: ${exportInfo}` : undefined,
+                    sortText: isFallback ? '9999' : '0000',
+                    range: {
+                        startLineNumber: position.lineNumber,
+                        startColumn: position.column,
+                        endLineNumber: position.lineNumber,
+                        endColumn: position.column
+                    }
                 };
             });
 
@@ -175,156 +224,199 @@ export async function GetFileExportsSummary(path, editor) {
 
     if (!code || typeof code !== 'string') return null;
 
-    const lines = code.split('\n');
-    const exports = new Set();
+    const lines = [];
 
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-        let m;
-
-        // export default class Blah { ... }
-        if ((m = line.match(/^export\s+default\s+class\s+([A-Za-z0-9_]+)/))) {
-            exports.add(`default class: ${m[1]}`);
-        }
-        // export class Blah { ... }
-        else if ((m = line.match(/^export\s+class\s+([A-Za-z0-9_]+)/))) {
-            exports.add(`class: ${m[1]}`);
-        }
-        // export default function Blah() { ... }
-        else if ((m = line.match(/^export\s+default\s+(async\s+)?function\s+([A-Za-z0-9_]+)/))) {
-            exports.add(`default function: ${m[2]}`);
-        }
-        // export async function Blah() { ... }
-        else if ((m = line.match(/^export\s+(async\s+)?function\s+([A-Za-z0-9_]+)/))) {
-            exports.add(`function: ${m[2]}`);
-        }
-        // export const Blah = ...
-        else if ((m = line.match(/^export\s+const\s+([A-Za-z0-9_]+)/))) {
-            exports.add(`const: ${m[1]}`);
-        }
-        // export let Blah = ...
-        else if ((m = line.match(/^export\s+let\s+([A-Za-z0-9_]+)/))) {
-            exports.add(`let: ${m[1]}`);
-        }
-        // export var Blah = ...
-        else if ((m = line.match(/^export\s+var\s+([A-Za-z0-9_]+)/))) {
-            exports.add(`var: ${m[1]}`);
-        }
-        // export { a, b as c }
-        else if ((m = line.match(/^export\s*{\\s*([^}]+)\s*}/))) {
-            const parts = m[1].split(',');
-            for (const part of parts) {
-                const p = part.trim();
-                const asMatch = p.match(/^([A-Za-z0-9_]+)\s+as\s+([A-Za-z0-9_]+)/);
-                if (asMatch) {
-                    exports.add(`named: ${asMatch[2]} (from ${asMatch[1]})`);
-                } else {
-                    const simple = p.match(/^([A-Za-z0-9_]+)/);
-                    if (simple) {
-                        exports.add(`named: ${simple[1]}`);
-                    }
-                }
-            }
-        }
-        // export * from './Blah'
-        else if ((m = line.match(/^export\s+\*\s+from\s+['"]([^'"]+)['"]/))) {
-            exports.add(`re-export * from: ${m[1]}`);
-        }
-        // export { a, b } from './Blah'
-        else if ((m = line.match(/^export\s*{\\s*([^}]+)\s*}\s*from\s+['"]([^'"]+)['"]/))) {
-            const fromPath = m[2];
-            const parts = m[1].split(',');
-            for (const part of parts) {
-                const p = part.trim();
-                const asMatch = p.match(/^([A-Za-z0-9_]+)\s+as\s+([A-Za-z0-9_]+)/);
-                if (asMatch) {
-                    exports.add(`re-export: ${asMatch[2]} (from ${fromPath})`);
-                } else {
-                    const simple = p.match(/^([A-Za-z0-9_]+)/);
-                    if (simple) {
-                        exports.add(`re-export: ${simple[1]} (from ${fromPath})`);
-                    }
-                }
-            }
-        }
-        // export default Blah;
-        else if ((m = line.match(/^export\s+default\s+([A-Za-z0-9_]+)/))) {
-            const exportedVar = m[1];
-            exports.add(`default: ${exportedVar}`);
-
-            const ctorRegex = new RegExp(
-                `\\b(const|let|var)\\s+${exportedVar}\\s*=\\s*new\\s+([A-Za-z0-9_]+)`
-            );
-
-            const ctorMatch = code.match(ctorRegex);
-            if (ctorMatch) {
-                const className = ctorMatch[2];
-                exports.add(`default instance of: ${className}`);
-            }
-        }
-        // module.exports = Blah
-        else if ((m = line.match(/^module\.exports\s*=\s*/))) {
-            if (line.match(/function/)) {
-                const nameM = line.match(/function\s+([A-Za-z0-9_$]+)/);
-                exports.add(nameM ? `commonjs default function: ${nameM[1]}` : `commonjs default function: (anonymous)`);
-            } else if (line.match(/class/)) {
-                const nameM = line.match(/class\s+([A-Za-z0-9_$]+)/);
-                exports.add(nameM ? `commonjs default class: ${nameM[1]}` : `commonjs default class: (anonymous)`);
-            } else if (line.match(/\{/)) {
-                exports.add(`commonjs default object`);
-            } else {
-                const idM = line.match(/^module\.exports\s*=\s*([A-Za-z0-9_$]+)/);
-                exports.add(idM ? `commonjs default: ${idM[1]}` : `commonjs default export`);
-            }
-        }
-        // module.exports.name = Blah
-        else if ((m = line.match(/^module\.exports\.([A-Za-z0-9_$]+)\s*=/))) {
-            exports.add(`commonjs named: ${m[1]}`);
-        }
-        // exports.name = Blah
-        else if ((m = line.match(/^exports\.([A-Za-z0-9_$]+)\s*=/))) {
-            exports.add(`commonjs named: ${m[1]}`);
+    const exportParser = new ExportParser(code);
+    const esExports = exportParser.ParseAllExports();
+    for (const e of esExports) {
+        if (e.kind === 'class') {
+            lines.push(e.name === 'default' ? 'default class: (anonymous)' : `class: ${e.name}`);
+        } else if (e.kind === 'function') {
+            lines.push(e.name === 'default' ? 'default function: (anonymous)' : `function: ${e.name}`);
+        } else {
+            lines.push(e.name === 'default' ? `default: ${e.type}` : `const: ${e.name}`);
         }
     }
 
-    if (exports.size === 0) {
+    const commonjsExports = parseCommonJSExports(code);
+    for (const exp of commonjsExports) {
+        lines.push(exp);
+    }
+
+    if (lines.length === 0) {
         return '_No exports detected in this file._';
     }
 
-    return Array.from(exports).slice(0, 20).map(e => `- ${e}`).join('\n');
+    return lines.slice(0, 20).map(e => `- ${e}`).join('\n');
 }
 
-export function CollectDefinedIdentifiers(model) {
-    // this was chatgpted cuz im lazy to redo the regex
-    const text = model.getValue();
-    const ids = new Set();
-    let m;
+function parseCommonJSExports(code) {
+    const tokenizer = new JSTokenizer(code);
+    const exports = [];
 
-    const importDefault = /\bimport\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+from\b/g;
-    while ((m = importDefault.exec(text)) !== null) ids.add(m[1]);
+    tokenizer.pos = 0;
+    while (!tokenizer.IsAtEnd()) {
+        tokenizer.SkipWhitespaceAndComments();
 
-    const importNamed = /\bimport\s*{([^}]+)}\s*from\b/g;
-    while ((m = importNamed.exec(text)) !== null) {
-        const parts = m[1].split(',');
-        for (const p of parts) {
-            const nm = /([A-Za-z_$][A-Za-z0-9_$]*)/.exec(p.trim());
-            if (nm) ids.add(nm[1]);
+        const savedPos = tokenizer.SavePosition();
+
+        if (tokenizer.MatchSequence('module.exports')) {
+            tokenizer.SkipWhitespaceAndComments();
+            if (tokenizer.MatchChar('=')) {
+                tokenizer.SkipWhitespaceAndComments();
+
+                if (tokenizer.MatchKeyword('function')) {
+                    const name = tokenizer.ReadIdentifier();
+                    exports.push(name ? `commonjs default function: ${name}` : 'commonjs default function: (anonymous)');
+                }
+                else if (tokenizer.MatchChar('{')) {
+                    exports.push('commonjs default object');
+                }
+                else {
+                    const id = tokenizer.ReadIdentifier();
+                    exports.push(id ? `commonjs default: ${id}` : 'commonjs default export');
+                }
+            }
+        }
+        else if (tokenizer.MatchSequence('module.exports.')) {
+            const prop = tokenizer.ReadIdentifier();
+            if (prop && tokenizer.MatchChar('=')) {
+                exports.push(`commonjs named: ${prop}`);
+            }
+        }
+        else if (tokenizer.MatchSequence('exports.')) {
+            const prop = tokenizer.ReadIdentifier();
+            if (prop && tokenizer.MatchChar('=')) {
+                exports.push(`commonjs named: ${prop}`);
+            }
+        } else {
+            tokenizer.RestorePosition(savedPos);
+            tokenizer.Advance();
         }
     }
 
-    const varLike = /\b(var|let|const)\s+([A-Za-z_$][A-Za-z0-9_$]*)/g;
-    while ((m = varLike.exec(text)) !== null) ids.add(m[2]);
+    return exports;
+}
 
-    const funcDecl = /\bfunction\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g;
-    while ((m = funcDecl.exec(text)) !== null) ids.add(m[1]);
+const collectIds = new WeakMap();
 
-    const classDecl = /\bclass\s+([A-Za-z_$][A-Za-z0-9_$]*)\b/g;
-    while ((m = classDecl.exec(text)) !== null) ids.add(m[1]);
+export function CollectDefinedIdentifiers(model) {
+    if (!model) return [];
 
-    const arrowFunc = /\b([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*\([^)]*\)\s*=>/g;
-    while ((m = arrowFunc.exec(text)) !== null) ids.add(m[1]);
+    const versionId = typeof model.getVersionId === 'function' ? model.getVersionId() : null;
+    const cached = collectIds.get(model);
+    if (cached && cached.versionId === versionId) {
+        return cached.ids.slice();
+    }
 
-    return Array.from(ids);
+    const text = typeof model.getValue === 'function' ? model.getValue() : (model.getValue && model.getValue()) || model;
+    if (!text || !String(text).trim()) {
+        collectIds.set(model, {
+            versionId,
+            ids: []
+        });
+        return [];
+    }
+
+    const tokenizer = new JSTokenizer(text);
+    const ids = new Set();
+
+    while (!tokenizer.IsAtEnd()) {
+        tokenizer.SkipWhitespaceAndComments();
+
+        if (tokenizer.IsAtEnd()) break;
+
+        if (tokenizer.MatchKeyword('import')) {
+            tokenizer.SkipWhitespaceAndComments();
+            const importName = tokenizer.ReadIdentifier();
+            if (importName) {
+                tokenizer.SkipWhitespaceAndComments();
+                if (tokenizer.MatchKeyword('from')) {
+                    ids.add(importName);
+                }
+            }
+            continue;
+        }
+
+        if (tokenizer.MatchKeyword('import')) {
+            tokenizer.SkipWhitespaceAndComments();
+            if (tokenizer.Peek() === '{') {
+                const braceContent = tokenizer.ExtractBetween('{', '}');
+                if (braceContent) {
+                    const braceTokenizer = new JSTokenizer(braceContent);
+                    while (!braceTokenizer.IsAtEnd()) {
+                        braceTokenizer.SkipWhitespaceAndComments();
+                        const name = braceTokenizer.ReadIdentifier();
+                        if (name) ids.add(name);
+                        braceTokenizer.SkipWhitespaceAndComments();
+                        braceTokenizer.MatchChar(',');
+                    }
+                }
+                tokenizer.SkipWhitespaceAndComments();
+                tokenizer.MatchKeyword('from');
+            }
+            continue;
+        }
+
+        if (tokenizer.MatchKeyword('var') || tokenizer.MatchKeyword('let') || tokenizer.MatchKeyword('const')) {
+            tokenizer.SkipWhitespaceAndComments();
+            const name = tokenizer.ReadIdentifier();
+            if (name) ids.add(name);
+            continue;
+        }
+
+        if (tokenizer.MatchKeyword('function')) {
+            tokenizer.SkipWhitespaceAndComments();
+            const funcName = tokenizer.ReadIdentifier();
+            if (funcName) ids.add(funcName);
+            tokenizer.ExtractBetween('(', ')');
+            continue;
+        }
+
+        if (tokenizer.MatchKeyword('class')) {
+            tokenizer.SkipWhitespaceAndComments();
+            const className = tokenizer.ReadIdentifier();
+            if (className) ids.add(className);
+            continue;
+        }
+
+        if ((tokenizer.MatchKeyword('const') || tokenizer.MatchKeyword('let') || tokenizer.MatchKeyword('var')) ||
+            tokenizer.ReadIdentifier()) {
+            const savedPos = tokenizer.SavePosition();
+            tokenizer.SkipWhitespaceAndComments();
+
+            if (tokenizer.MatchChar('=')) {
+                tokenizer.SkipWhitespaceAndComments();
+
+                const paramStart = tokenizer.SavePosition();
+                if (tokenizer.Peek() === '(') {
+                    tokenizer.ExtractBetween('(', ')');
+                    tokenizer.SkipWhitespaceAndComments();
+                } else {
+                    tokenizer.ReadIdentifier();
+                    tokenizer.SkipWhitespaceAndComments();
+                }
+
+                if (tokenizer.MatchSequence('=>')) {
+                    tokenizer.RestorePosition(savedPos);
+                    const arrowName = tokenizer.ReadIdentifier();
+                    if (arrowName) ids.add(arrowName);
+                } else {
+                    tokenizer.RestorePosition(paramStart);
+                }
+            }
+            tokenizer.RestorePosition(savedPos);
+        }
+
+        tokenizer.Advance();
+    }
+
+    const result = Array.from(ids);
+    collectIds.set(model, {
+        versionId,
+        ids: result.slice()
+    });
+    return result;
 }
 
 function Levenshtein(a, b) {
@@ -362,17 +454,38 @@ export function FindClosestIdentifier(name, candidates, maxDistance = 3) {
     return best && bestDist <= maxDistance ? best : null;
 }
 
+export const jsBuiltIns = new Set([
+    'function', 'const', 'let', 'var', 'class', 'if', 'else', 'while', 'for',
+    'do', 'switch', 'case', 'break', 'continue', 'return', 'try', 'catch',
+    'finally', 'throw', 'new', 'this', 'typeof', 'instanceof', 'void', 'delete',
+    'in', 'of', 'async', 'await', 'yield', 'import', 'export', 'from', 'default',
+    'extends', 'super', 'static', 'get', 'set', 'true', 'false', 'null', 'undefined',
+    'console', 'window', 'document', 'Math', 'Date', 'Array', 'Object', 'String',
+    'Number', 'Boolean', 'RegExp', 'Error', 'JSON', 'Promise', 'Set', 'Map',
+    'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'parseInt',
+    'parseFloat', 'isNaN', 'isFinite', 'Infinity', 'NaN', 'eval', 'encodeURI',
+    'decodeURI', 'encodeURIComponent', 'decodeURIComponent', 'alert', 'confirm',
+    'prompt', 'fetch', 'XMLHttpRequest', 'localStorage', 'sessionStorage',
+    'navigator', 'location', 'history', 'crypto', 'performance', 'requestAnimationFrame',
+    'cancelAnimationFrame', 'URL', 'Blob', 'File', 'FileReader', 'FormData',
+    'Headers', 'Request', 'Response', 'WebSocket', 'Worker', 'Symbol', 'Proxy',
+    'Reflect', 'ArrayBuffer', 'DataView', 'Int8Array', 'Uint8Array', 'Int16Array',
+    'Uint16Array', 'Int32Array', 'Uint32Array', 'Float32Array', 'Float64Array',
+    'BigInt', 'WeakMap', 'WeakSet', 'Intl', 'BigInt64Array', 'BigUint64Array'
+]);
+
 export function SetupTypoCorrection(editor) {
+
     monaco.languages.registerCompletionItemProvider('javascript', {
-        triggerCharacters: [
-            '.', ' ', '\n',
-            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
-            'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
-            'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
-            'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'
-        ],
+        triggerCharacters: ['.', ' ', '\n'],
 
         provideCompletionItems: (model, position) => {
+            if (typeof model.getValueLength === 'function' && model.getValueLength() > 200000) {
+                return {
+                    suggestions: []
+                };
+            }
+
             const wordUntil = model.getWordUntilPosition(position);
             const fullWord = model.getWordAtPosition(position) || wordUntil;
             const name = fullWord && fullWord.word;
@@ -410,7 +523,7 @@ export function SetupTypoCorrection(editor) {
                 options: {
                     inlineClassName: 'typoFixUnderline',
                     hoverMessage: {
-                        value: `Did you mean ${closest}?`
+                        value: `Did you mean **${closest}**?`
                     },
                     description: 'TypoFix'
                 }
@@ -423,7 +536,7 @@ export function SetupTypoCorrection(editor) {
                     insertText: closest,
                     range,
                     sortText: '0000',
-                    detail: 'Fix typo'
+                    detail: `Fix typo → ${closest}`
                 }]
             };
         }

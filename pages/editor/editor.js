@@ -1,4 +1,18 @@
-import { RunTypoAnalysis, SetupSmartImports, SetupTypoCorrection, getProjectFileList, FindClosestIdentifier, CollectDefinedIdentifiers, GetFileExportsSummary } from "./services/LanguageService.js";
+import {
+    RunTypoAnalysis,
+    SetupSmartImports,
+    SetupTypoCorrection,
+    getProjectFileList,
+    FindClosestIdentifier,
+    CollectDefinedIdentifiers,
+    GetFileExportsSummary,
+    jsBuiltIns
+} from "./services/LanguageService.js";
+
+import {
+    FunctionParser,
+    FunctionDetector
+} from "./services/Tokenizer.js";
 
 // src: https://developer.mozilla.org/en-US/docs/Web/API/IndexedDB_API
 // just a simple wrapper for indexeddb makes it easier to use with promises
@@ -247,73 +261,80 @@ class ScriptFlowEditor {
         this.init();
     }
 
+    /**
+     * Basic Time Tracker.
+     *
+     * Modified for better performance.
+     * */
     setupTimeTracking() {
-        this.sessionStartTime = Date.now();
-        this.lastActivityTime = Date.now();
-        this.isActive = true;
-        this.activityTimeout = null;
+        this.pageVisibleStartTime = null;
+        this.lastSendTime = Date.now();
+        this.timeTracker = null;
 
-        const updateActivity = () => {
-            this.lastActivityTime = Date.now();
-            if (!this.isActive) {
-                this.isActive = true;
-            }
+        const isPageVisible = () => !document.hidden;
 
-            clearTimeout(this.activityTimeout);
-            this.activityTimeout = setTimeout(() => {
-                this.isActive = false;
-            }, 30000);
-        };
-
-        if (this.editor) {
-            this.editor.onDidChangeModelContent(() => updateActivity());
-            this.editor.onDidChangeCursorPosition(() => updateActivity());
-        }
-
-        document.addEventListener('mousemove', updateActivity);
-        document.addEventListener('keydown', updateActivity);
-        document.addEventListener('click', updateActivity);
-        document.addEventListener('scroll', updateActivity);
-
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                this.isActive = false;
-            } else {
-                updateActivity();
-            }
-        });
-
-        this.timeTracker = setInterval(() => {
+        const sendActualTimeSpent = () => {
             if (!this.script || !this.scriptId) return;
 
             const now = Date.now();
-            if (this.isActive && (now - this.lastActivityTime) <= 30000) {
-                const elapsed = Math.floor((now - this.sessionStartTime) / 1000);
+            if (now - this.lastSendTime < 300000) return;
+
+            let actualTimeSpent = 0;
+
+            if (this.pageVisibleStartTime) {
+                actualTimeSpent = Math.floor((now - this.pageVisibleStartTime) / 1000);
+            }
+
+            if (actualTimeSpent > 0) {
                 const previousTime = this.script.timeSpent || 0;
-                this.script.timeSpent = previousTime + Math.min(elapsed, 60);
-                this.sessionStartTime = now;
+                this.script.timeSpent = previousTime + actualTimeSpent;
 
                 chrome.runtime.sendMessage({
                     action: 'updateScriptTime',
                     scriptId: this.scriptId,
                     timeSpent: this.script.timeSpent
                 }).catch(err => console.error(err));
-            } else {
-                this.sessionStartTime = now;
             }
-        }, 10000);
+
+            this.lastSendTime = now;
+            this.pageVisibleStartTime = isPageVisible() ? now : null;
+        };
+
+        this.timeTracker = setInterval(() => {
+            if (!this.script || !this.scriptId) return;
+
+            if (isPageVisible()) {
+                if (!this.pageVisibleStartTime) {
+                    this.pageVisibleStartTime = Date.now();
+                }
+            } else {
+                this.pageVisibleStartTime = null;
+            }
+
+            sendActualTimeSpent();
+        }, 1000);
 
         window.addEventListener('beforeunload', () => {
-            if (this.script && this.scriptId && this.isActive) {
-                const elapsed = Math.floor((Date.now() - this.sessionStartTime) / 1000);
-                const previousTime = this.script.timeSpent || 0;
-                this.script.timeSpent = previousTime + elapsed;
+            if (this.script && this.scriptId && this.pageVisibleStartTime) {
+                const elapsed = Math.floor((Date.now() - this.pageVisibleStartTime) / 1000);
+                if (elapsed > 0) {
+                    const previousTime = this.script.timeSpent || 0;
+                    this.script.timeSpent = previousTime + elapsed;
 
-                chrome.runtime.sendMessage({
-                    action: 'updateScriptTime',
-                    scriptId: this.scriptId,
-                    timeSpent: this.script.timeSpent
-                });
+                    chrome.runtime.sendMessage({
+                        action: 'updateScriptTime',
+                        scriptId: this.scriptId,
+                        timeSpent: this.script.timeSpent
+                    });
+                }
+            }
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (isPageVisible()) {
+                this.pageVisibleStartTime = Date.now();
+            } else {
+                this.pageVisibleStartTime = null;
             }
         });
     }
@@ -1941,22 +1962,53 @@ class ScriptFlowEditor {
                 if (trimmedLine.startsWith('/**')) {
                     let funcLine = position.lineNumber + 1;
                     let funcText = '';
+
                     while (funcLine <= model.getLineCount()) {
-                        funcText = model.getLineContent(funcLine);
-                        if (funcText.includes('function ') || funcText.includes('(')) break;
+                        const currentLine = model.getLineContent(funcLine);
+                        funcText += currentLine + '\n';
+                        const detector = new FunctionDetector(funcText);
+                        if (detector.HasFunctionDeclaration()) break;
                         funcLine++;
+                        if (funcLine - position.lineNumber > 15) break;
                     }
 
-                    const paramMatch = funcText.match(/\(([^)]+)\)/);
-                    const params = paramMatch ? paramMatch[1].split(',').map(p => p.trim()) : ['param'];
+                    const parser = new FunctionParser(funcText);
+                    const signature = parser.ParseFunctionSignature();
 
-                    const paramTags = params.map(param => ` * @param {any} ${param} - Description`).join('\n');
+                    let params = [];
+                    let functionName = '';
+
+                    if (signature && signature.parameters) {
+                        params = signature.parameters;
+                        functionName = signature.name || '';
+                    } else {
+                        params = [{
+                            name: 'param',
+                            type: 'normal',
+                            jsType: 'any'
+                        }];
+                    }
+
+                    const paramTags = params.map(param => {
+                        let tagName = param.name;
+                        let tagType = param.jsType || 'any';
+
+                        if (param.type === 'rest') {
+                            tagName = `...${param.name}`;
+                            tagType = '...any';
+                        } else if (param.type === 'destructured') {
+                            tagName = param.jsType === 'Array' ? `[${param.name}]` : `{${param.name}}`;
+                        }
+
+                        return ` * @param {${tagType}} ${tagName} - Description`;
+                    }).join('\n');
+
                     const jsdocSnippet = [
                         '',
-                        ' * ${1:Function description.}', 
+                        functionName ? ` * ${functionName} - \${1:Function description.}` : ' * ${1:Function description.}',
                         ' *',
                         paramTags,
-                        ' * @returns {any} ${2:Return description.}', 
+                        ' * @returns {any} ${2:Return description.}',
                         ' *'
                     ].join('\n');
 
@@ -2373,12 +2425,11 @@ class ScriptFlowEditor {
             let t;
             return () => {
                 clearTimeout(t);
-                t = setTimeout(() => RunTypoAnalysis(this), 120); // 1 tick, which is literally from moomoo :sob:
+                t = setTimeout(() => RunTypoAnalysis(this), 500);
             };
         })();
 
         this.editor.onDidChangeModelContent(debounced);
-        this.editor.onDidChangeCursorPosition(debounced);
     }
 
     UpdateVersionBadge() {
@@ -3653,7 +3704,7 @@ class ScriptFlowEditor {
 
         return modules;
     }
-    
+
     /**
      * A Helper to get files from Git FS or Local WorkSpace.
      *
@@ -3739,25 +3790,28 @@ class ScriptFlowEditor {
      */
     initEditor() {
         return new Promise((resolve) => {
-            window.MonacoEnvironment = {
+            /*window.MonacoEnvironment = {
                 getWorkerUrl: function(moduleId, label) {
                     const extensionUrl = chrome.runtime.getURL('');
 
+                    let workerUrl;
+
                     if (label === 'json') {
-                        return extensionUrl + 'lib/vs/language/json/json.worker.js';
+                        workerUrl = extensionUrl + 'lib/vs/language/json/json.worker.js';
+                    } else if (label === 'css' || label === 'scss' || label === 'less') {
+                        workerUrl = extensionUrl + 'lib/vs/language/css/css.worker.js';
+                    } else if (label === 'html' || label === 'handlebars' || label === 'razor') {
+                        workerUrl = extensionUrl + 'lib/vs/language/html/html.worker.js';
+                    } else if (label === 'typescript' || label === 'javascript') {
+                        workerUrl = extensionUrl + 'lib/vs/language/typescript/ts.worker.js';
+                    } else {
+                        workerUrl = extensionUrl + 'lib/vs/editor/editor.worker.js';
                     }
-                    if (label === 'css' || label === 'scss' || label === 'less') {
-                        return extensionUrl + 'lib/vs/language/css/css.worker.js';
-                    }
-                    if (label === 'html' || label === 'handlebars' || label === 'razor') {
-                        return extensionUrl + 'lib/vs/language/html/html.worker.js';
-                    }
-                    if (label === 'typescript' || label === 'javascript') {
-                        return extensionUrl + 'lib/vs/language/typescript/ts.worker.js';
-                    }
-                    return extensionUrl + 'lib/vs/editor/editor.worker.js';
+
+                    console.log(`Loading worker for ${label}:`, workerUrl);
+                    return workerUrl;
                 }
-            };
+            };*/
 
             require.config({
                 paths: {
@@ -3768,13 +3822,16 @@ class ScriptFlowEditor {
             require(['vs/editor/editor.main'], () => {
                 monaco.languages.typescript.javascriptDefaults.setEagerModelSync(false);
                 monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
-                    noSemanticValidation: false,
+                    noSemanticValidation: true,
                     noSyntaxValidation: false,
-                    noSuggestionDiagnostics: false,
+                    noSuggestionDiagnostics: true,
+                    onlyVisibleLines: true,
                     diagnosticCodesToIgnore: [
                         1375,
                         2339,
                         7016,
+                        2304,
+                        2552
                     ],
                 });
 
@@ -3792,9 +3849,16 @@ class ScriptFlowEditor {
                     skipLibCheck: true,
                     skipDefaultLibCheck: true,
                     maxNodeModuleJsDepth: 0,
+                    strict: false,
+                    noImplicitAny: false,
+                    incremental: false,
+                    isolatedModules: true,
+                    noResolve: false,
+                    types: ['gm-global'],
+                    typeRoots: ['file:///'],
                 });
 
-                const gmTypeDefs = `
+                /*const gmTypeDefs = `
                     declare function GM_addStyle(css: string): HTMLElement;
                     declare function GM_setValue(name: string, value: any): void;
                     declare function GM_getValue(name: string, defaultValue?: any): any;
@@ -3806,7 +3870,29 @@ class ScriptFlowEditor {
                     declare const browser: any;
                     declare const GM: any;
                     declare const GM_info: any;
+                    declare global {
+                        interface Window {
+                            unsafeWindow: Window;
+                        }
+                    }
+                `;*/
+                const gmTypeDefs = `
+                    declare global {
+                        const unsafeWindow: Window;
+                        const chrome: any;
+                        const browser: any;
+                        const GM: any;
+                        const GM_info: any;
+                        
+                        function GM_addStyle(css: string): HTMLElement;
+                        function GM_setValue(name: string, value: any): void;
+                        function GM_getValue(name: string, defaultValue?: any): any;
+                        function GM_deleteValue(name: string): void;
+                        function GM_listValues(): string[];
+                        function GM_log(message: any): void;
+                    }
                 `;
+
                 monaco.languages.typescript.javascriptDefaults.addExtraLib(gmTypeDefs, 'file:///gm.d.ts');
 
                 monaco.editor.defineTheme('dracula', {
@@ -3958,19 +4044,24 @@ class ScriptFlowEditor {
                             }
                         }
 
-                        const decorations = model.getDecorationsInRange(range).filter(d => d.options.description === 'TypoFix');
+                        const decorations = model.getDecorationsInRange(range).filter(d =>
+                            d.options.description === 'TypoFix'
+                        );
 
                         const actions = [];
+                        const identifiers = CollectDefinedIdentifiers(model);
 
                         for (const d of decorations) {
                             const typoRange = d.range;
                             const word = model.getValueInRange(typoRange);
-                            const identifiers = CollectDefinedIdentifiers(model);
+
+                            if (jsBuiltIns.has(word)) continue;
+
                             const closest = FindClosestIdentifier(word, identifiers);
                             if (!closest || closest === word) continue;
 
                             actions.push({
-                                title: `Replace with '${closest}'`,
+                                title: `Replace '${word}' with '${closest}'`,
                                 kind: 'quickfix',
                                 edit: {
                                     edits: [{
@@ -4002,6 +4093,12 @@ class ScriptFlowEditor {
                         }
 
                         const name = wordInfo.word;
+
+                        if (jsBuiltIns.has(name)) {
+                            return {
+                                items: []
+                            };
+                        }
 
                         const identifiers = CollectDefinedIdentifiers(model);
                         const closest = FindClosestIdentifier(name, identifiers);
@@ -4041,28 +4138,29 @@ class ScriptFlowEditor {
                     matchBrackets: 'always',
                     wordWrap: 'on',
                     tabSize: 4,
-                    insertSpaces: false,
+                    insertSpaces: "auto",
                     glyphMargin: true,
                     minimap: {
                         enabled: true
                     },
                     smoothScrolling: true,
-                    cursorSmoothCaretAnimation: "on",
+                    cursorSmoothCaretAnimation: "off",
                     scrollBeyondLastLine: false,
                     mouseWheelScrollSensitivity: 1,
                     fastScrollSensitivity: 5,
                     scrollbar: {
-                      useShadows: false,
-                      verticalHasArrows: false,
-                      horizontalHasArrows: false,
-                      vertical: 'visible',
-                      horizontal: 'visible',
-                      verticalScrollbarSize: 12,
-                      horizontalScrollbarSize: 12,
-                      arrowSize: 30,
-                      handleMouseWheel: true,
-                      alwaysConsumeMouseWheel: false
+                        useShadows: false,
+                        verticalHasArrows: false,
+                        horizontalHasArrows: false,
+                        vertical: 'visible',
+                        horizontal: 'visible',
+                        verticalScrollbarSize: 12,
+                        horizontalScrollbarSize: 12,
+                        arrowSize: 30,
+                        handleMouseWheel: true,
+                        alwaysConsumeMouseWheel: false
                     },
+                    largeFileOptimizations: true,
                     automaticLayout: true,
                     inlineSuggest: {
                         enabled: true,
@@ -5562,205 +5660,6 @@ ${JSON.stringify(meta, null, 2)}
             this.setStatus('Backup failed', true, 'error');
         }
     }
-
-    // this takes a local workspace and pushes it to a new github repo
-    // new note: this doesnt look like its needed anymore so im removing it
-    /*async pushNew() {
-        if (this.mode !== 'workspace' || !this.workspaceHandle) {
-            this.logGit("ERROR: A workspace must be loaded first");
-            return;
-        }
-
-        const url = document.getElementById('repoUrl').value;
-        let branch = document.getElementById('branch').value.trim();
-        if (!branch) branch = 'main';
-
-        if (!url) {
-            this.logGit('ERROR: Repository URL required');
-            return;
-        }
-
-        this.logGit('Pushing local workspace...');
-
-        try {
-            let repoExists = false;
-            try {
-                await this.gitFS.stat(`${this.gitDir}/.git`);
-                repoExists = true;
-                this.logGit('Existing repo found, syncing...');
-            } catch (err) {
-                this.logGit('Initializing new repo...');
-            }
-
-            if (!repoExists) {
-                this.logGit(`Clearing virtual workspace...`);
-                try {
-                    const entries = await this.gitFS.readdir(this.gitDir);
-                    for (const entry of entries) {
-                        await this.deleteRecursive(`${this.gitDir}/${entry}`);
-                    }
-                    this.logGit('Workspace cleared');
-                } catch (err) {
-                    if (err.code === 'ENOENT') {
-                        await this.gitFS.mkdir(this.gitDir);
-                    } else {
-                        throw err;
-                    }
-                }
-
-                this.logGit('Initializing Git repo...');
-                await this.git.init({
-                    fs: this.fs,
-                    dir: this.gitDir
-                });
-
-                this.logGit(`Adding remote: ${url}`);
-                await this.git.addRemote({
-                    fs: this.fs,
-                    dir: this.gitDir,
-                    remote: 'origin',
-                    url
-                });
-            } else {
-                this.logGit('Fetching remote changes...');
-                try {
-                    await this.git.fetch({
-                        fs: this.fs,
-                        http: this.http,
-                        dir: this.gitDir,
-                        onAuth: () => this.getAuth(),
-                        ref: branch,
-                        singleBranch: true
-                    });
-
-                    this.logGit('Merging remote changes...');
-                    await this.git.merge({
-                        fs: this.fs,
-                        dir: this.gitDir,
-                        ours: branch,
-                        theirs: `origin/${branch}`,
-                        author: {
-                            name: 'ScriptFlow Editor',
-                            email: 'bot@scriptflow.app'
-                        }
-                    });
-                    this.logGit('Remote changes merged');
-                } catch (fetchErr) {
-                    this.logGit(`Fetch note: ${fetchErr.message}`);
-                }
-
-                this.logGit('Clearing working directory...');
-                const entries = await this.gitFS.readdir(this.gitDir);
-                for (const entry of entries) {
-                    if (entry !== '.git') {
-                        await this.deleteRecursive(`${this.gitDir}/${entry}`);
-                    }
-                }
-                this.logGit('Working directory cleared');
-            }
-
-            this.logGit(`Copying files from "${this.workspaceHandle.name}"...`);
-            await this.copyToFS(this.workspaceHandle, this.gitDir, false);
-            this.logGit('Files copied');
-
-            this.logGit('Staging files...');
-            const status = await this.git.statusMatrix({
-                fs: this.fs,
-                dir: this.gitDir
-            });
-            
-            let hasChanges = false;
-            for (const [path, ...statuses] of status) {
-                const headStatus = statuses[0];
-                const workdirStatus = statuses[1];
-                
-                if (workdirStatus === 0 && headStatus !== 0) {
-                    await this.git.remove({
-                        fs: this.fs,
-                        dir: this.gitDir,
-                        filepath: path
-                    });
-                    this.logGit(` - Staged deletion: ${path}`);
-                    hasChanges = true;
-                } else if (workdirStatus === 2) {
-                    await this.git.add({
-                        fs: this.fs,
-                        dir: this.gitDir,
-                        filepath: path
-                    });
-                    hasChanges = true;
-                }
-            }
-
-            if (!hasChanges && repoExists) {
-                this.logGit('No changes to commit');
-                this.gitModal.classList.remove('visible');
-                return;
-            }
-
-            this.logGit('Creating commit...');
-            const sha = await this.git.commit({
-                fs: this.fs,
-                dir: this.gitDir,
-                message: repoExists ? `Update from ScriptFlow` : 'Initial commit from ScriptFlow',
-                author: {
-                    name: 'ScriptFlow Editor',
-                    email: 'bot@scriptflow.app'
-                },
-            });
-            this.logGit(`Committed: ${sha.substring(0, 7)}`);
-
-            if (!repoExists) {
-                this.logGit(`Creating branch '${branch}'...`);
-                try {
-                    await this.git.branch({
-                        fs: this.fs,
-                        dir: this.gitDir,
-                        ref: branch,
-                        checkout: true
-                    });
-                } catch (e) {
-                    // branch might already exist
-                }
-            }
-
-            this.logGit(`Pushing to origin/${branch}...`);
-            const result = await this.git.push({
-                fs: this.fs,
-                http: this.http,
-                dir: this.gitDir,
-                remote: 'origin',
-                ref: branch,
-                force: false,
-                onAuth: () => this.getAuth(),
-            });
-
-            if (this.editorSettings.useCorsProxy) {
-                result.corsProxy = 'https://cors.isomorphic-git.org';
-            }
-
-            if (!result?.ok) {
-                throw new Error(`Push failed: ${result ? JSON.stringify(result.errors) : 'No response'}`);
-            }
-
-            this.logGit('Push successful!');
-            this.saveCounter = 0;
-            await this.updateRepoHistory(url);
-
-            await this.idb.set('settings', 'gitWorkspace', {
-                url,
-                branch
-            });
-            this.mode = 'git';
-            this.setStatus(`Pushed to ${url}`);
-            this.gitModal.classList.remove('visible');
-            await this.buildGitTree();
-
-        } catch (err) {
-            this.logGit(`ERROR: ${err.message}`);
-            console.error(err);
-        }
-    }*/
 
     // handles renaming for both git and local files
     async rename() {
