@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "ScriptFlow",
-    "version": "1.18.5",
+    "version": "1.18.6",
     "description": "Simple code editor and injector.",
     "permissions": [
         "storage",

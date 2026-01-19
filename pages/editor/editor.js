@@ -6554,14 +6554,14 @@ ${JSON.stringify(meta, null, 2)}
 
     async moveLocalFile(sourceFileHandle, targetDirHandle, sourceParentHandle, newName = null) {
         const file = await sourceFileHandle.getFile();
-        const name = newName || file.name;
+        const name = newName || sourceFileHandle.name;
         const newFileHandle = await targetDirHandle.getFileHandle(name, {
             create: true
         });
         const writable = await newFileHandle.createWritable();
         await writable.write(await file.arrayBuffer());
         await writable.close();
-        await sourceParentHandle.removeEntry(file.name);
+        await sourceParentHandle.removeEntry(sourceFileHandle.name);
         return newFileHandle;
     }
 
@@ -6570,14 +6570,18 @@ ${JSON.stringify(meta, null, 2)}
         const newDirHandle = await targetDirHandle.getDirectoryHandle(name, {
             create: true
         });
+        const entries = [];
         for await (const entry of sourceDirHandle.values()) {
+            entries.push(entry);
+        }
+        for (const entry of entries) {
             if (entry.kind === 'file') {
                 await this.moveLocalFile(entry, newDirHandle, sourceDirHandle);
             } else if (entry.kind === 'directory') {
                 await this.moveLocalDirectory(entry, newDirHandle, sourceDirHandle);
             }
         }
-        await sourceParentHandle.removeEntry(sourceDirHandle.name);
+        await sourceParentHandle.removeEntry(sourceDirHandle.name, { recursive: true });
         return newDirHandle;
     }
 
